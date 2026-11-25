@@ -13,6 +13,13 @@ Unscene inherits the active OBS theme palette and native list selection/hover re
 
 ![Rose Pine Dawn — Pine](docs/screenshots/rose-pine-dawn.png)
 
+## Navigation and density
+Search the scene collection by name, including sources inside collapsed scenes and groups. Matching branches retain their hierarchy; clearing search restores the previous expansion state. Expand/collapse settings persist per collection name using scene and item identities. The toolbar density menu independently sets scene and source artwork to Compact, Standard, or Large. Compact disables automatic snapshot capture for those rows while retaining custom artwork.
+
+![Search inside collapsed scenes](docs/screenshots/search.png)
+
+![Large scene thumbnails and compact source icons](docs/screenshots/mixed-density.png)
+
 ## Custom appearance
 Right-click any scene or source row, or use its Appearance action. Choose automatic artwork, one of 13 built-in line icons, or import a local image/icon file. Choose a row color independently; Clear restores the theme color and Reset restores both defaults. Confirm with OK.
 
@@ -35,4 +42,4 @@ First prototype screenshot (before the rename):
 
 ## Current limitations
 
-First working slice, not a full native dock replacement. No drag/drop, add/remove, search, persistence, nested scene traversal, polished custom icons, automatic snapshot invalidation, or CI yet. Group traversal and Studio Mode activation are implemented but have not been runtime-validated. GPU readback is synchronous and not yet profiled. Inactive sources without cached snapshots remain placeholders.
+Not yet a full native dock replacement. Drag/drop, add/remove, nested scene traversal, automatic snapshot invalidation, and CI are still pending. Expansion preferences are keyed by collection name; renaming a collection does not currently migrate them. Group traversal and Studio Mode activation are implemented but have not been runtime-validated. GPU readback is synchronous and not yet profiled. Inactive sources without cached snapshots remain placeholders.
