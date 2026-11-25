@@ -130,6 +130,10 @@ class Dock : public QWidget {
  QVector<QPointer<Reveal>> retiring;
  QVector<GlyphButton*> toolbar;
  int motionDuration=navigation.motionDuration();
+ SnapshotMode snapshotMode=navigation.snapshotMode();
+ bool captureAllowed()const{
+  return canCapture(snapshotMode,{obs_frontend_streaming_active(),obs_frontend_recording_active(),obs_frontend_replay_buffer_active(),obs_frontend_virtualcam_active()});
+ }
  bool resetRows=false,animateStructure=false;
  void finishRetiring(){
   for(auto shell:retiring)if(shell){shell->onSettled={};rows->removeWidget(shell);delete shell;}
@@ -165,6 +169,12 @@ class Dock : public QWidget {
     a->setCheckable(true);a->setChecked((scenes?sceneDensity:sourceDensity)==d);group->addAction(a);
     connect(a,&QAction::triggered,this,[this,scenes,d]{changeDensity(scenes,d);});
    }
+  }
+  auto*captures=menu.addMenu("Snapshot capture");auto*captureGroup=new QActionGroup(captures);
+  for(auto mode:{SnapshotMode::CachedOnly,SnapshotMode::IdleOnly}){
+   auto*a=captures->addAction(mode==SnapshotMode::CachedOnly?"Cached artwork only (no GPU capture)":"Generate snapshots when outputs are idle");
+   a->setCheckable(true);a->setChecked(mode==snapshotMode);captureGroup->addAction(a);
+   connect(a,&QAction::triggered,this,[this,mode]{snapshotMode=mode;navigation.saveSnapshotMode(mode);request();});
   }
   auto*motion=menu.addMenu("Animations");auto*motionGroup=new QActionGroup(motion);
   for(int ms:{0,90,150}){auto*a=motion->addAction(ms==0?"Off":ms==90?"Fast":"Smooth");a->setCheckable(true);a->setChecked(ms==motionDuration);motionGroup->addAction(a);connect(a,&QAction::triggered,this,[this,ms]{setMotion(ms);});}
@@ -455,13 +465,14 @@ class Dock : public QWidget {
  void queueAppearance(const Node&n){QTimer::singleShot(0,this,[this,n]{editAppearance(n);});}
  static constexpr int maxDepth=24;
  void updateSnapshots(){
-  if(!isVisible()||layoutMoving())return;
+  if(!isVisible()||layoutMoving()||!captureAllowed())return;
   for(const auto&n:previous){
    auto label=labels.value(n.key);
    if(!snapshotKeys.contains(n.key)||artworkOverrides.contains(n.uid)||!n.video||!label||thumbnails.contains(n.uid)||!scroll->viewport()->rect().intersects(QRect(label->mapTo(scroll->viewport(),QPoint()),label->size())))continue;
    auto s=source(n.uid);if(!s||!obs_source_showing(s.get()))continue;
    if(attempted.contains(n.uid)&&clock.elapsed()-attempted.value(n.uid)<3000)continue;
    attempted.insert(n.uid,clock.elapsed());
+   if(!captureAllowed())return;
    const auto image=captureSnapshot(s.get());if(!hasVisiblePixels(image))return;
    if(thumbnails.size()>=512)thumbnails.clear();
    auto pix=QPixmap::fromImage(image);thumbnails.insert(n.uid,pix);
@@ -598,8 +609,8 @@ public:
   auto*l=new QVBoxLayout(this);l->setContentsMargins(2,2,2,2);l->setSpacing(2);
   auto*bar=new QHBoxLayout; collapse=new GlyphButton("collapse-all",this);collapse->setToolTip("Collapse all scenes");
   expand=new GlyphButton("expand-all",this);expand->setToolTip("Expand all scenes");
-  auto*refreshButton=new GlyphButton("refresh",this);refreshButton->setToolTip("Refresh snapshots");
-  connect(refreshButton,&QToolButton::clicked,this,[this,refreshButton]{refreshButton->spin();thumbnails.clear();attempted.clear();dirty=true;request();});
+  auto*refreshButton=new GlyphButton("refresh",this);refreshButton->setToolTip("Refresh snapshots (when idle capture is enabled and outputs are idle)");
+  connect(refreshButton,&QToolButton::clicked,this,[this,refreshButton]{refreshButton->spin();if(!captureAllowed())return;thumbnails.clear();attempted.clear();dirty=true;request();});
   auto*settingsButton=new GlyphButton("properties",this);settingsButton->setToolTip("Dock settings");settingsButton->setAccessibleName("Dock settings");
   toolbar={refreshButton,collapse,expand,settingsButton};for(auto*b:toolbar)b->setMotionDuration(motionDuration);
   connect(settingsButton,&QToolButton::clicked,this,[this,settingsButton]{densityMenu(settingsButton);});

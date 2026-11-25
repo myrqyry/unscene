@@ -20,6 +20,9 @@ Search the scene collection by name, including sources inside collapsed scenes a
 
 ![Large scene thumbnails and compact source icons](docs/screenshots/mixed-density.png)
 
+## Graphics isolation
+Dock settings → Snapshot capture defaults to Cached artwork only (no GPU capture). Existing session snapshots and custom artwork remain visible; on a fresh session, uncached rows use icons. Opt in to Generate snapshots when outputs are idle to populate thumbnails. Capture is blocked while OBS reports streaming, recording, replay buffer or virtual camera active. Refresh does not discard cached snapshots while capture is blocked. Snapshot capture in the optional idle mode still uses synchronous graphics-context access; it is not a zero-contention path. Animation uses only GUI-side widget transitions.
+
 ## Motion
 Unscene uses short, interruptible Qt transitions for scene/group expansion, source secondary controls, search results, hover buttons, disclosure chevrons and snapshot refresh feedback. Unchanged rows are retained instead of recreated. Dock settings → Animations offers Off, Fast (90 ms) and Smooth (150 ms, default), persisted independently of the scene collection. Large structural changes skip row animation; snapshot capture waits until layout transitions settle. Motion is limited to Unscene's own widgets, not native OBS menus or dialogs.
 
