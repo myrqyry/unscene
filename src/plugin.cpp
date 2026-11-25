@@ -15,6 +15,11 @@
 #include "snapshot.hpp"
 #include "appearance-dialog.hpp"
 #include "navigation.hpp"
+#include "source-picker.hpp"
+#include "item-copy.hpp"
+#include <QInputDialog>
+#include <QScopedValueRollback>
+#include <cstring>
 #include <QActionGroup>
 #include <QCache>
 #include <QDir>
@@ -135,6 +140,137 @@ class Dock : public QWidget {
  }
  QSet<QString> artworkOverrides;
  bool editingAppearance=false;
+ std::optional<ItemCopy> copied;
+ bool sameCollection(const QString&expected)const{
+  char*raw=obs_frontend_get_current_scene_collection();
+  auto current=QString::fromUtf8(raw?raw:"");bfree(raw);
+  return !stopping&&!expected.isEmpty()&&current==expected;
+ }
+ void changedScene(const QString&sceneKey){
+  const auto root=sceneKey.section('/',0,0);
+  thumbnails.remove(root);attempted.remove(root);
+  obs_frontend_save();dirty=true;request();
+ }
+ void revealScene(const Node&n){
+  if(!opened.contains(n.key)){opened.insert(n.key);saveOpened();}
+  changedScene(n.key);
+ }
+ void addSource(const Node&n){
+  if(editingAppearance||!n.scene||stopping)return;
+  const auto expected=collection;
+  QScopedValueRollback<bool> guard(editingAppearance,true);
+  QVector<SourceChoice> existing,types;
+  obs_enum_sources([](void*opaque,obs_source_t*s){
+   auto&list=*static_cast<QVector<SourceChoice>*>(opaque);
+   if(obs_source_get_type(s)!=OBS_SOURCE_TYPE_INPUT||obs_source_removed(s)||obs_source_is_group(s)||obs_source_is_scene(s))return true;
+   auto name=QString::fromUtf8(obs_source_get_name(s));auto id=uuid(s);
+   if(!name.isEmpty()&&!id.isEmpty())list.append({id,name});
+   return true;
+  },&existing);
+  QSet<QString> seen;
+  const char*id=nullptr,*base=nullptr;
+  for(size_t i=0;obs_enum_input_types2(i,&id,&base);++i){
+   if(!id||!base||!strcmp(base,"scene")||!strcmp(base,"group"))continue;
+   auto flags=obs_get_source_output_flags(id);
+   if(flags&(OBS_SOURCE_DEPRECATED|OBS_SOURCE_CAP_DISABLED))continue;
+   if(seen.contains(QString::fromUtf8(base)))continue;
+   auto label=QString::fromUtf8(obs_source_get_display_name(id));
+   if(label.isEmpty())continue;
+   seen.insert(QString::fromUtf8(base));types.append({QString::fromUtf8(id),label,true});
+  }
+  auto decorate=[this](SourceChoice&choice,int kind){
+   Node sample;sample.iconType=kind;choice.icon=QIcon(glyphPixmap(sourceGlyph(sample),palette().color(QPalette::WindowText),18,devicePixelRatioF()));
+  };
+  for(auto&e:existing){auto s=source(e.id);if(s)decorate(e,obs_source_get_icon_type(obs_source_get_id(s.get())));}
+  for(auto&t:types)decorate(t,obs_source_get_icon_type(t.id.toUtf8().constData()));
+  SourcePicker picker(n.title,existing,types,this);
+  if(picker.exec()!=QDialog::Accepted||!sameCollection(expected))return;
+  auto choice=picker.choice();if(choice.id.isEmpty())return;
+  QString name;
+  if(choice.create){
+   name=choice.label;
+   for(int i=2;;++i){Source used(obs_get_source_by_name(name.toUtf8().constData()),obs_source_release);if(!used)break;name=choice.label+" "+QString::number(i);}
+   bool ok=false;name=QInputDialog::getText(this,"New source","Source name",QLineEdit::Normal,name,&ok).trimmed();
+   if(!ok||name.isEmpty()||!sameCollection(expected))return;
+   Source used(obs_get_source_by_name(name.toUtf8().constData()),obs_source_release);
+   if(used){QMessageBox::warning(this,"Unscene","That source name is already in use.");return;}
+  }
+  auto target=source(n.uid);auto*scene=target?obs_scene_from_source(target.get()):nullptr;
+  if(!scene||!sameCollection(expected))return;
+  Source input(choice.create?obs_source_create(choice.id.toUtf8().constData(),name.toUtf8().constData(),nullptr,nullptr):obs_get_source_by_uuid(choice.id.toUtf8().constData()),obs_source_release);
+  if(!input||obs_source_removed(input.get())||obs_source_get_type(input.get())!=OBS_SOURCE_TYPE_INPUT||obs_source_is_group(input.get())||obs_source_is_scene(input.get())||!obs_scene_add(scene,input.get())){
+   QMessageBox::warning(this,"Unscene","Could not add the source to this scene.");return;
+  }
+  revealScene(n);
+  if(choice.create&&obs_source_configurable(input.get()))obs_frontend_open_source_properties(input.get());
+ }
+ bool canPaste(bool duplicate){
+  if(!copied)return false;
+  auto s=source(copied->uid);
+  return s&&!obs_source_removed(s.get())&&(!duplicate||!(obs_source_get_output_flags(s.get())&OBS_SOURCE_DO_NOT_DUPLICATE));
+ }
+ void pasteSource(const Node&n,bool duplicate){
+  if(stopping||!n.scene||!sameCollection(collection)||!canPaste(duplicate))return;
+  auto target=source(n.uid);auto*scene=target?obs_scene_from_source(target.get()):nullptr;
+  auto input=source(copied->uid);if(!scene||!input)return;
+  if(duplicate){
+   const auto base=QString::fromUtf8(obs_source_get_name(input.get()))+" copy";
+   QString name=base;
+   for(int i=2;;++i){Source used(obs_get_source_by_name(name.toUtf8().constData()),obs_source_release);if(!used)break;name=base+" "+QString::number(i);}
+   Source dup(obs_source_duplicate(input.get(),name.toUtf8().constData(),false),obs_source_release);
+   if(!dup||dup.get()==input.get()){QMessageBox::warning(this,"Unscene","This source cannot be duplicated independently.");return;}
+   input=std::move(dup);
+  }
+  if(!copied->paste(scene,input.get())){QMessageBox::warning(this,"Unscene","Could not paste the source into this scene.");return;}
+  revealScene(n);
+ }
+ void removeItem(const Node&n){
+  if(n.scene||n.group||editingAppearance||stopping)return;
+  const auto expected=collection;
+  QScopedValueRollback<bool> guard(editingAppearance,true);
+  QMessageBox question(QMessageBox::Question,"Remove source","Remove this source instance from its scene? Other instances of the same source will remain. This action does not currently support OBS Undo.",QMessageBox::Yes|QMessageBox::Cancel,this);
+  question.setInformativeText(n.title);question.setTextFormat(Qt::PlainText);question.setDefaultButton(QMessageBox::Cancel);
+  if(question.exec()!=QMessageBox::Yes||!sameCollection(expected))return;
+  itemAction(n,[this,n](auto*i){obs_sceneitem_remove(i);changedScene(n.key);});
+ }
+ void renameSource(const Node&n){
+  if(editingAppearance||stopping)return;
+  const auto expected=collection;
+  QScopedValueRollback<bool> guard(editingAppearance,true);
+  bool ok=false;auto name=QInputDialog::getText(this,"Rename source","Name (applies to every instance)",QLineEdit::Normal,n.title,&ok).trimmed();
+  if(!ok||name.isEmpty()||!sameCollection(expected))return;
+  auto s=source(n.uid);if(!s||obs_source_removed(s.get()))return;
+  Source other(obs_get_source_by_name(name.toUtf8().constData()),obs_source_release);
+  if(other&&other.get()!=s.get()){QMessageBox::warning(this,"Unscene","That source name is already in use.");return;}
+  obs_source_set_name(s.get(),name.toUtf8().constData());obs_frontend_save();dirty=true;request();
+ }
+ void contextMenu(const Node&n,const QPoint&pos){
+  if(editingAppearance||stopping)return;
+  auto expected=collection;
+  QMenu menu(this);
+  if(n.scene){
+   auto*add=menu.addAction("Add source…");connect(add,&QAction::triggered,this,[this,n]{QTimer::singleShot(0,this,[this,n]{addSource(n);});});
+   auto*ref=menu.addAction("Paste (reference)");ref->setEnabled(canPaste(false));
+   connect(ref,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))QTimer::singleShot(0,this,[this,n,expected]{if(sameCollection(expected))pasteSource(n,false);});});
+   auto*dup=menu.addAction("Paste (duplicate)");dup->setEnabled(canPaste(true));
+   connect(dup,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))QTimer::singleShot(0,this,[this,n,expected]{if(sameCollection(expected))pasteSource(n,true);});});
+  }else{
+   auto*props=menu.addAction("Properties");connect(props,&QAction::triggered,this,[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_properties(s.get());});
+   auto*filters=menu.addAction("Filters");connect(filters,&QAction::triggered,this,[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_filters(s.get());});
+   auto*transform=menu.addAction("Edit transform");connect(transform,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))itemAction(n,[](auto*i){obs_frontend_open_sceneitem_edit_transform(i);});});
+   if(!n.group){
+    menu.addSeparator();
+    auto*copy=menu.addAction("Copy source");auto input=source(n.uid);copy->setEnabled(input&&!obs_source_is_scene(input.get()));connect(copy,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))itemAction(n,[this](auto*i){copied=ItemCopy::capture(i);if(copied)obs_frontend_copy_sceneitem(i);});});
+    auto*remove=menu.addAction("Remove from scene…");connect(remove,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))QTimer::singleShot(0,this,[this,n]{removeItem(n);});});
+   }
+  }
+  menu.addSeparator();
+  auto*rename=menu.addAction("Rename…");connect(rename,&QAction::triggered,this,[this,n]{QTimer::singleShot(0,this,[this,n]{renameSource(n);});});
+  auto*appearance=menu.addAction("Appearance…");connect(appearance,&QAction::triggered,this,[this,n]{queueAppearance(n);});
+  menu.exec(pos);
+ }
+ void queueContext(const Node&n){const auto pos=QCursor::pos();QTimer::singleShot(0,this,[this,n,pos]{contextMenu(n,pos);});}
+
  void editAppearance(const Node& n){
   if(editingAppearance||stopping)return;
   editingAppearance=true;
@@ -207,11 +343,12 @@ class Dock : public QWidget {
    const auto art=appearancePixmap(appearance,artworkPalette(r),r->thumb->size());
    if(!art.isNull()){artworkOverrides.insert(n.uid);r->thumb->setPixmap(art);}
    r->setAccent(appearance.color);
-   r->onAppearance=[this,n]{queueAppearance(n);};
+   r->onAppearance=[this,n]{queueContext(n);};
    r->onBody=[this,n]{toggle(n);};
    if(n.scene){
     r->addHover(obs_frontend_preview_program_mode_active()?"Select preview scene":"Activate scene","arrow-right",[this,n]{auto s=source(n.uid);if(!s||!obs_scene_from_source(s.get()))return;if(obs_frontend_preview_program_mode_active())obs_frontend_set_current_preview_scene(s.get());else obs_frontend_set_current_scene(s.get());request();});
-    r->addHover("Appearance","appearance",[this,n]{queueAppearance(n);});
+    r->addHover("Add source","plus",[this,n]{QTimer::singleShot(0,this,[this,n]{addSource(n);});});
+    r->addHover("More actions","more",[this,n]{queueContext(n);});
    }else{
     r->addHover(n.visible?"Hide source":"Show source",n.visible?"eye":"eye-off",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_visible(i,!obs_sceneitem_visible(i));});},!n.visible);
     r->addHover(n.locked?"Unlock source":"Lock source",n.locked?"lock":"unlock",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_locked(i,!obs_sceneitem_locked(i));});},n.locked);
@@ -219,7 +356,7 @@ class Dock : public QWidget {
     r->addSecondary("Filters","filters",[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_filters(s.get());});
     r->addSecondary("Move up","up",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_order(i,OBS_ORDER_MOVE_UP);});});
     r->addSecondary("Move down","down",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_order(i,OBS_ORDER_MOVE_DOWN);});});
-    r->addSecondary("Appearance","appearance",[this,n]{queueAppearance(n);});
+    r->addSecondary("More actions","more",[this,n]{queueContext(n);});
     if(n.audio)r->addSecondary("Toggle mute",n.muted?"mute":"volume",[n]{auto s=source(n.uid);if(s)obs_source_set_muted(s.get(),!obs_source_muted(s.get()));});
    }
    rows->addWidget(r);
@@ -253,7 +390,7 @@ public:
  void refresh(){
   if(stopping||editingAppearance||!isVisible())return;
   char *raw=obs_frontend_get_current_scene_collection();QString now=QString::fromUtf8(raw?raw:"");bfree(raw);
-  if(collection!=now){collection=now;thumbnails.clear();attempted.clear();opened.clear();selected.clear();initialized=false;dirty=true;}
+  if(collection!=now){collection=now;copied.reset();thumbnails.clear();attempted.clear();opened.clear();selected.clear();initialized=false;dirty=true;}
   Source live(obs_frontend_get_current_scene(),obs_source_release);
   Source preview(obs_frontend_preview_program_mode_active()?obs_frontend_get_current_preview_scene():nullptr,obs_source_release);
   if(!initialized&&!now.isEmpty()){auto saved=navigation.opened(now);if(saved)opened=*saved;else if(live)opened.insert(uuid(live.get()));initialized=true;}

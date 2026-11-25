@@ -9,6 +9,8 @@
 
 inline QPixmap glyphPixmap(const QString &id,const QColor&color,int size,qreal dpr=1){
  static const QHash<QString,QString> paths={
+ {"plus","<path d='M12 5v14M5 12h14'/>"},
+ {"more","<circle cx='12' cy='5' r='1'/><circle cx='12' cy='12' r='1'/><circle cx='12' cy='19' r='1'/>"},
  {"eye","<path d='M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z'/><circle cx='12' cy='12' r='3'/>"},
  {"eye-off","<path d='M3 3l18 18M10.6 5.1 12 5c6.5 0 10 7 10 7a19 19 0 0 1-3 3.7M6.2 6.2C3.4 8.4 2 12 2 12s3.5 7 10 7c1.7 0 3.1-.4 4.3-1.1'/>"},
  {"lock","<rect x='5' y='10' width='14' height='11' rx='2'/><path d='M8 10V7a4 4 0 0 1 8 0v3M12 14v3'/>"},

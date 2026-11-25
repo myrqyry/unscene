@@ -20,6 +20,15 @@ Search the scene collection by name, including sources inside collapsed scenes a
 
 ![Large scene thumbnails and compact source icons](docs/screenshots/mixed-density.png)
 
+## Source management
+Hover a scene and click the plus button (or right-click it) to open the searchable source picker. Existing sources are added as shared references; New source lists available input types and prompts for a unique name. New configurable sources open their native properties.
+
+Right-click a source for properties, filters, transform editing, copy, rename, appearance, and removal. Copy a source in Unscene, then right-click a destination scene and choose Paste (reference) or Paste (duplicate). Pasting preserves the copied item's transform, crop, scale filter, blending, visibility, and lock state. A duplicate creates an independent source when the source type permits it. Unscene keeps a collection-scoped clipboard and also invokes native OBS copy; native-to-Unscene clipboard import is not supported. Adding or pasting into an inactive scene does not switch the live scene. Removal targets only the selected scene item, with confirmation.
+
+![New source picker](docs/screenshots/source-picker.png)
+
+![Shared and independent copies across scenes](docs/screenshots/cross-scene-copy.png)
+
 ## Custom appearance
 Right-click any scene or source row, or use its Appearance action. Choose automatic artwork, one of 13 built-in line icons, or import a local image/icon file. Choose a row color independently; Clear restores the theme color and Reset restores both defaults. Confirm with OK.
 
@@ -42,4 +51,4 @@ First prototype screenshot (before the rename):
 
 ## Current limitations
 
-Not yet a full native dock replacement. Drag/drop, add/remove, nested scene traversal, automatic snapshot invalidation, and CI are still pending. Expansion preferences are keyed by collection name; renaming a collection does not currently migrate them. Group traversal and Studio Mode activation are implemented but have not been runtime-validated. GPU readback is synchronous and not yet profiled. Inactive sources without cached snapshots remain placeholders.
+Not yet a full native dock replacement. Drag/drop, nested scene traversal, scene/group creation and deletion, general snapshot invalidation, and CI are still pending. Direct add/paste/remove/rename actions do not yet integrate with OBS Undo. The add picker and paste target root scenes; copying groups or nested scenes is not supported. Expansion preferences are keyed by collection name; renaming a collection does not currently migrate them. Group traversal and Studio Mode activation are implemented but have not been runtime-validated. GPU readback is synchronous and not yet profiled. Inactive sources without cached snapshots remain placeholders.
