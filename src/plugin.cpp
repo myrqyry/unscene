@@ -13,6 +13,7 @@
 #include <memory>
 #include "row.hpp"
 #include "snapshot.hpp"
+#include <QToolBar>
 #include "appearance-dialog.hpp"
 #include "navigation.hpp"
 #include "source-picker.hpp"
@@ -85,13 +86,14 @@ const char* nativeIconProperty(const Node&n){
  }
 }
 QPixmap sourceArtwork(const Node&n,Row*r){
+ const auto size=qMin(r->thumb->height(),r->style()->pixelMetric(QStyle::PM_SmallIconSize,nullptr,r));
  auto*window=static_cast<QWidget*>(obs_frontend_get_main_window());
  if(window){
   const auto index=window->metaObject()->indexOfProperty(nativeIconProperty(n));
   if(index>=0){
    const auto value=window->metaObject()->property(index).read(window);
    const auto icon=qvariant_cast<QIcon>(value);
-   auto pix=icon.pixmap(QSize(18,18),r->devicePixelRatioF());
+   auto pix=icon.pixmap(QSize(size,size),r->devicePixelRatioF());
    if(!pix.isNull()){
     if(n.program||n.preview||r->expanded()){
      QPainter painter(&pix);painter.setCompositionMode(QPainter::CompositionMode_SourceIn);painter.fillRect(pix.rect(),r->inkColor());
@@ -100,7 +102,7 @@ QPixmap sourceArtwork(const Node&n,Row*r){
    }
   }
  }
- return glyphPixmap(sourceGlyph(n),r->inkColor(),18,r->devicePixelRatioF());
+ return glyphPixmap(sourceGlyph(n),r->inkColor(),size,r->devicePixelRatioF());
 }
 QPalette artworkPalette(Row*r){auto p=r->palette();p.setColor(QPalette::WindowText,r->inkColor());return p;}
 QString configPath(const char* file){
@@ -109,7 +111,7 @@ QString configPath(const char* file){
  return path;
 }
 class Dock : public QWidget {
- QListView *nativeList; QVBoxLayout *rows; QScrollArea *scroll; QWidget *body; QTimer timer;
+ QListView *nativeList; QVBoxLayout *rows; QVBoxLayout *dockLayout; QToolBar*bar; QScrollArea *scroll; QWidget *body; QTimer timer;
  QSet<QString> opened; QString selected,collection; QVector<Node> previous; bool initialized=false, pending=false, stopping=false;
  QHash<QString,QPixmap> thumbnails;
  QHash<QString,qint64> attempted;
@@ -606,23 +608,29 @@ public:
  Dock(){
   setObjectName("UnsceneContent");
   nativeList=new QListView(this);nativeList->hide();nativeList->ensurePolished();
-  auto*l=new QVBoxLayout(this);l->setContentsMargins(2,2,2,2);l->setSpacing(2);
-  auto*bar=new QHBoxLayout; collapse=new GlyphButton("collapse-all",this);collapse->setToolTip("Collapse all scenes");
-  expand=new GlyphButton("expand-all",this);expand->setToolTip("Expand all scenes");
-  auto*refreshButton=new GlyphButton("refresh",this);refreshButton->setToolTip("Refresh snapshots (when idle capture is enabled and outputs are idle)");
+  auto*l=new QVBoxLayout(this);dockLayout=l;
+  bar=new QToolBar(this);bar->setMovable(false);bar->setFloatable(false); collapse=new GlyphButton("collapse-all",bar);collapse->setToolTip("Collapse all scenes");
+  expand=new GlyphButton("expand-all",bar);expand->setToolTip("Expand all scenes");
+  auto*refreshButton=new GlyphButton("refresh",bar);refreshButton->setToolTip("Refresh snapshots (when idle capture is enabled and outputs are idle)");
   connect(refreshButton,&QToolButton::clicked,this,[this,refreshButton]{refreshButton->spin();if(!captureAllowed())return;thumbnails.clear();attempted.clear();dirty=true;request();});
-  auto*settingsButton=new GlyphButton("properties",this);settingsButton->setToolTip("Dock settings");settingsButton->setAccessibleName("Dock settings");
+  auto*settingsButton=new GlyphButton("properties",bar);settingsButton->setToolTip("Dock settings");settingsButton->setAccessibleName("Dock settings");
   toolbar={refreshButton,collapse,expand,settingsButton};for(auto*b:toolbar)b->setMotionDuration(motionDuration);
   connect(settingsButton,&QToolButton::clicked,this,[this,settingsButton]{densityMenu(settingsButton);});
-  search=new QLineEdit(this);search->setPlaceholderText("Find scenes or sources…");search->setClearButtonEnabled(true);search->setAccessibleName("Find scenes or sources");search->setMinimumWidth(50);
-  bar->addWidget(search,1);bar->addWidget(refreshButton);bar->addWidget(collapse);bar->addWidget(expand);bar->addWidget(settingsButton);l->addLayout(bar);
+  search=new QLineEdit(bar);search->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);search->setPlaceholderText("Find scenes or sources…");search->setClearButtonEnabled(true);search->setAccessibleName("Find scenes or sources");search->setMinimumWidth(50);
+  bar->addWidget(search);bar->addWidget(refreshButton);bar->addWidget(collapse);bar->addWidget(expand);bar->addWidget(settingsButton);l->addWidget(bar);
   connect(search,&QLineEdit::textChanged,this,[this](const QString&t){query=t;animateStructure=true;collapse->setEnabled(!searching());expand->setEnabled(!searching());dirty=true;request();});
-  scroll=new QScrollArea(this);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);body=new QWidget;rows=new QVBoxLayout(body);rows->setContentsMargins(0,0,0,0);rows->setSpacing(1);scroll->setWidget(body);l->addWidget(scroll);
+  scroll=new QScrollArea(this);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);body=new QWidget;rows=new QVBoxLayout(body);rows->setContentsMargins(0,0,0,0);rows->setSpacing(1);scroll->setWidget(body);l->addWidget(scroll);themeGeometry();
   connect(collapse,&QToolButton::clicked,this,[this]{animateStructure=true;opened.clear();selected.clear();saveOpened();dirty=true;request();});
   connect(expand,&QToolButton::clicked,this,[this]{animateStructure=true;opened.unite(sceneKeys);saveOpened();dirty=true;request();});
   connect(&timer,&QTimer::timeout,this,[this]{refresh();});clock.start();timer.start(400);
  }
- void themeChanged(){resetRows=true;dirty=true;request();}
+ void themeGeometry(){
+  int h=themeSpacing(this,Qt::Horizontal),v=themeSpacing(this,Qt::Vertical);
+  dockLayout->setContentsMargins(qMax(1,h/2),qMax(1,v/2),qMax(1,h/2),qMax(1,v/2));dockLayout->setSpacing(qMax(1,v/2));
+  rows->setSpacing(qMax(0,nativeList->spacing()));search->setMinimumWidth(search->fontMetrics().horizontalAdvance("MMMM"));
+  bar->updateGeometry();
+ }
+ void themeChanged(){themeGeometry();resetRows=true;dirty=true;request();}
  void stop(){stopping=true;timer.stop();}
  void refresh(){
   if(stopping||editingAppearance||!isVisible())return;

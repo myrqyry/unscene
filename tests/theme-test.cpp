@@ -22,5 +22,24 @@ int main(int argc,char**argv){
  CHECK(r.name->palette().color(QPalette::WindowText)==p.color(QPalette::HighlightedText));
  r.setSelected(false);CHECK(r.name->palette().color(QPalette::WindowText)==p.color(QPalette::WindowText));
  CHECK(r.hoverButtons.first()->accessibleName()=="Activate");
+ // A stylesheet geometry change must affect real widget dimensions and paint.
+ QWidget host;auto*layout=new QVBoxLayout(&host);auto*button=new GlyphButton("eye",&host);
+ layout->addWidget(button);host.show();app.processEvents();
+ host.setStyleSheet("QToolButton { icon-size: 12px; padding: 2px; border: 1px solid #2468ac; border-radius: 0px; background: #123456; }");
+ app.processEvents();const auto small=button->sizeHint();
+ CHECK(button->themedIconSize()==QSize(12,12));
+ CHECK(button->grab().toImage().pixelColor(3,3)==QColor("#123456"));
+ host.setStyleSheet("QToolButton { icon-size: 24px; padding: 9px; border: 3px solid #2468ac; border-radius: 0px; background: #123456; }");
+ app.processEvents();CHECK(button->themedIconSize()==QSize(24,24));
+ CHECK(button->sizeHint().width()>small.width()+10);
+ CHECK(button->sizeHint().height()>small.height()+10);
+ CHECK(button->width()>=button->sizeHint().width());
+ const auto square=button->grab().toImage();
+ host.setStyleSheet("QToolButton { icon-size: 24px; padding: 9px; border: 3px solid #2468ac; border-radius: 18px; background: #123456; }");
+ app.processEvents();
+ CHECK(button->grab().toImage().pixelColor(1,1)!=square.pixelColor(1,1));
+ QListView native;native.setStyleSheet("QListView::item { padding: 9px; min-height: 55px; border: 2px solid transparent; }");
+ Row styled("Source",false,false,1);styled.setNativeList(&native);styled.show();app.processEvents();
+ CHECK(styled.sizeHint().height()>=55);
  return 0;
 }

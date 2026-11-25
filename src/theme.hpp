@@ -8,6 +8,9 @@
 #include <QVariantAnimation>
 #include <QEnterEvent>
 #include <QPixmapCache>
+#include <QStyle>
+#include <QStyleOptionViewItem>
+#include <QLayout>
 #include "appearance.hpp"
 
 inline QPixmap glyphPixmap(const QString &id,const QColor&color,int size,qreal dpr=1){
@@ -51,8 +54,17 @@ inline bool hasVisiblePixels(const QImage&image){
 inline QColor mixColor(const QColor&a,const QColor&b,qreal t){
  return QColor::fromRgbF(a.redF()*(1-t)+b.redF()*t,a.greenF()*(1-t)+b.greenF()*t,a.blueF()*(1-t)+b.blueF()*t);
 }
+inline int themeSpacing(const QWidget*w,Qt::Orientation orientation){
+ const int value=w->style()->pixelMetric(orientation==Qt::Horizontal?QStyle::PM_LayoutHorizontalSpacing:QStyle::PM_LayoutVerticalSpacing,nullptr,w);
+ return qBound(1,value<0?3:value,16);
+}
+inline QSize nativeItemSize(const QWidget*w,const QSize&content){
+ QStyleOptionViewItem opt;opt.initFrom(w);opt.features=QStyleOptionViewItem::HasDisplay;
+ opt.text="M";opt.font=w->font();opt.fontMetrics=w->fontMetrics();
+ return w->style()->sizeFromContents(QStyle::CT_ItemViewItem,&opt,content,w).expandedTo(content);
+}
 class GlyphButton:public QToolButton{
- QString glyph; QColor ink;
+ QString glyph;
  QVariantAnimation hoverMotion,angleMotion,alphaMotion;
  qreal hover=0,angle=0,alpha=1;
  int duration=0;
@@ -62,7 +74,10 @@ class GlyphButton:public QToolButton{
  }
 public:
  explicit GlyphButton(QString id,QWidget*parent=nullptr):QToolButton(parent),glyph(std::move(id)){
-  setAutoRaise(true);setCursor(Qt::PointingHandCursor);setFixedSize(22,22);setIconSize(QSize(16,16));setAttribute(Qt::WA_Hover);
+  setAutoRaise(true);setCursor(Qt::PointingHandCursor);setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Fixed);setAttribute(Qt::WA_Hover);
+  setToolButtonStyle(Qt::ToolButtonIconOnly);
+  // A nonempty icon allows QToolButton to calculate its native content size.
+  setIcon(QIcon(glyphPixmap(glyph,palette().color(QPalette::ButtonText),16)));
   for(auto*a:{&hoverMotion,&angleMotion,&alphaMotion})a->setEasingCurve(QEasingCurve::OutCubic);
   connect(&hoverMotion,&QVariantAnimation::valueChanged,this,[this](auto v){hover=v.toReal();update();});
   connect(&angleMotion,&QVariantAnimation::valueChanged,this,[this](auto v){angle=v.toReal();update();});
@@ -82,15 +97,39 @@ public:
  }
  void spin(){if(!duration)return;angleMotion.stop();angle=0;animate(angleMotion,0,360);}
  void setGlyph(const QString&id){if(glyph!=id){glyph=id;update();}}
- void setInk(const QColor&c){if(ink!=c){ink=c;update();}}
+ QSize themedIconSize()const{
+  int side=style()->pixelMetric(QStyle::PM_ToolBarIconSize,nullptr,this);
+  if(side<=0)side=style()->pixelMetric(QStyle::PM_ButtonIconSize,nullptr,this);
+  return QSize(qBound(8,side,64),qBound(8,side,64));
+ }
+ QSize sizeHint()const override{
+  const_cast<GlyphButton*>(this)->ensurePolished();
+  QStyleOptionToolButton opt;initStyleOption(&opt);opt.iconSize=themedIconSize();
+  return style()->sizeFromContents(QStyle::CT_ToolButton,&opt,opt.iconSize,this).expandedTo(opt.iconSize);
+ }
+ QSize minimumSizeHint()const override{return sizeHint();}
 protected:
+ void changeEvent(QEvent*e)override{QToolButton::changeEvent(e);if(e->type()==QEvent::StyleChange||e->type()==QEvent::FontChange||e->type()==QEvent::PaletteChange){updateGeometry();update();}}
  void enterEvent(QEnterEvent*e)override{if(duration)animate(hoverMotion,hover,1);else{hover=1;update();}QToolButton::enterEvent(e);}
  void leaveEvent(QEvent*e)override{if(duration)animate(hoverMotion,hover,0);else{hover=0;update();}QToolButton::leaveEvent(e);}
  void paintEvent(QPaintEvent*)override{
   QPainter p(this);p.setRenderHint(QPainter::Antialiasing);p.setOpacity(alpha);
-  const auto fg=ink.isValid()?ink:palette().color(isEnabled()?QPalette::Active:QPalette::Disabled,QPalette::WindowText);
-  if(hover>0||isDown()||hasFocus()){auto fill=fg;fill.setAlpha(isDown()?52:qRound(24*qMax(hover,hasFocus()?1.0:0.0)));p.setPen(Qt::NoPen);p.setBrush(fill);p.drawRoundedRect(rect().adjusted(1,1,-1,-1),4,4);}
-  if(hasFocus()){QPen pen(fg);pen.setStyle(Qt::DotLine);p.setPen(pen);p.setBrush(Qt::NoBrush);p.drawRoundedRect(rect().adjusted(1,1,-1,-1),4,4);}
-  int size=iconSize().width();const auto pix=glyphPixmap(glyph,fg,size,devicePixelRatioF());p.translate(width()/2.0,height()/2.0);p.rotate(angle);p.drawPixmap(QPoint(-size/2,-size/2),pix);
+  QStyleOptionToolButton opt;initStyleOption(&opt);opt.iconSize=themedIconSize();
+  const auto fg=palette().color(isEnabled()?QPalette::Active:QPalette::Disabled,QPalette::ButtonText);
+  const int size=opt.iconSize.width();
+  auto pix=glyphPixmap(glyph,fg,size,devicePixelRatioF());
+  if(qAbs(angle)>0.01&&qAbs(angle-360)>0.01){
+   QPixmap rotated(pix.size());rotated.setDevicePixelRatio(pix.devicePixelRatio());rotated.fill(Qt::transparent);
+   QPainter painter(&rotated);painter.setRenderHint(QPainter::SmoothPixmapTransform);painter.translate(size/2.0,size/2.0);painter.rotate(angle);painter.drawPixmap(QPointF(-size/2.0,-size/2.0),pix);painter.end();pix=rotated;
+  }
+  opt.icon=QIcon(pix);opt.icon.addPixmap(pix,QIcon::Disabled);
+  // Delegate the complete button surface and glyph placement to the active style.
+  // Blend only the hover layer; press/focus feedback stays immediate.
+  if(!isDown()&&!hasFocus()&&hover>0&&hover<1){
+   auto base=opt;base.state&=~QStyle::State_MouseOver;
+   style()->drawComplexControl(QStyle::CC_ToolButton,&base,&p,this);
+   p.setOpacity(alpha*hover);opt.state|=QStyle::State_MouseOver;
+  }else if(!isDown()&&!hasFocus()){if(hover>0)opt.state|=QStyle::State_MouseOver;else opt.state&=~QStyle::State_MouseOver;}
+  style()->drawComplexControl(QStyle::CC_ToolButton,&opt,&p,this);
  }
 };

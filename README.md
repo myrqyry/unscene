@@ -7,11 +7,11 @@ A standalone, native Qt dock for OBS that combines Scenes and Sources. Scene row
 Snapshots are cached by source UUID, captured only for visible rows whose source is already showing, with at most one attempt per 400 ms timer cycle. No forced source activation; unavailable snapshots retain icons. Refresh snapshots manually via the toolbar. Snapshots are currently session-only and do not automatically track changes to content.
 
 ## Theme integration
-Unscene inherits the active OBS theme palette and native list selection/hover rendering. Default source artwork uses the OBS main window's theme icon properties when available, with semantic palette-colored fallbacks. Action glyphs, disclosure arrows, labels, and selected text follow the palette; custom row colors remain optional. File and color dialogs use in-process Qt styling. Theme change events invalidate the row presentation without changing source state.
+Unscene delegates button surfaces, icon placement, borders, corner geometry, hover and press states to the active Qt/OBS style. Button dimensions use native style content sizing and icon metrics; row padding and minimum height derive from native list-item styling. Layout spacing uses Qt metrics and the toolbar is a native QToolBar. Source artwork uses native OBS theme icon properties when available. Row foreground and button foreground are resolved separately to keep selected rows readable. Theme changes rebuild the presentation without changing source state. Thumbnail density, semantic action glyphs, custom row accents, hierarchy indentation and animation timing remain Unscene design choices; not every private OBS theme token is exposed through Qt.
 
-![Fluffy Dark](docs/screenshots/fluffy-dark.png)
+![Fluffy Dark](docs/screenshots/fluffy-dark-native-style.png)
 
-![Rose Pine Dawn — Pine](docs/screenshots/rose-pine-dawn.png)
+![Rosé Pine Dawn — Pine](docs/screenshots/rose-pine-dawn-native-style.png)
 
 ## Navigation and density
 Search the scene collection by name, including sources inside collapsed scenes and groups. Matching branches retain their hierarchy; clearing search restores the previous expansion state. Expand/collapse settings persist per collection name using scene and item identities. The toolbar density menu independently sets scene and source artwork to Compact, Standard, or Large. Compact disables automatic snapshot capture for those rows while retaining custom artwork.
