@@ -6,6 +6,13 @@ A standalone, native Qt dock for OBS that combines Scenes and Sources. Scene row
 
 Snapshots are cached by source UUID, captured only for visible rows whose source is already showing, with at most one attempt per 400 ms timer cycle. No forced source activation; unavailable snapshots retain icons. Refresh snapshots manually via the toolbar. Snapshots are currently session-only and do not automatically track changes to content.
 
+## Custom appearance
+Right-click any scene or source row, or use its Appearance action. Choose automatic artwork, one of 13 built-in line icons, or import a local image/icon file. Choose a row color independently; Clear restores the theme color and Reset restores both defaults. Confirm with OK.
+
+Appearance follows the OBS source UUID, so a reused source has consistent artwork and color across scenes. Imported artwork is stored as a bounded PNG in Unscene's own configuration, not as an external file dependency. Custom artwork takes precedence over automatic snapshots. These settings do not change the stream or the native OBS source configuration.
+
+![Custom scene icon and color, shared source artwork](docs/screenshots/custom-appearance.png)
+
 ## Build (Linux / Qt 6 / OBS 32.2 tested)
 ```sh
 cmake -S . -B build -Dlibobs_DIR=/usr/local/lib/cmake/libobs -Dobs-frontend-api_DIR=/usr/local/lib/cmake/obs-frontend-api

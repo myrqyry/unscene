@@ -13,6 +13,8 @@
 #include <memory>
 #include "row.hpp"
 #include "snapshot.hpp"
+#include "appearance-dialog.hpp"
+#include <QDir>
 #include <QElapsedTimer>
 
 OBS_DECLARE_MODULE()
@@ -28,6 +30,11 @@ struct Node {
  bool operator==(const Node &b)const {return key==b.key&&uid==b.uid&&parent==b.parent&&title==b.title&&id==b.id&&depth==b.depth&&scene==b.scene&&group==b.group&&visible==b.visible&&locked==b.locked&&program==b.program&&preview==b.preview&&video==b.video&&audio==b.audio;}
 };
 Node makeNode(obs_source_t *s){Node n; n.uid=uuid(s); n.title=QString::fromUtf8(obs_source_get_name(s)); auto flags=obs_source_get_output_flags(s); n.video=flags&OBS_SOURCE_VIDEO; n.audio=flags&OBS_SOURCE_AUDIO; return n;}
+QString appearancePath(){
+ char* raw=obs_module_config_path("appearance.ini");
+ const auto path=QString::fromUtf8(raw?raw:"");bfree(raw);
+ return path;
+}
 class Dock : public QWidget {
  QVBoxLayout *rows; QScrollArea *scroll; QWidget *body; QTimer timer;
  QSet<QString> opened; QString selected,collection; QVector<Node> previous; bool initialized=false, pending=false, stopping=false;
@@ -36,12 +43,26 @@ class Dock : public QWidget {
  QHash<QString,QPointer<QLabel>> labels;
  QMultiHash<QString,QString> keys;
  QElapsedTimer clock;
+ AppearanceStore appearances{appearancePath()};
+ QSet<QString> artworkOverrides;
+ bool editingAppearance=false;
+ void editAppearance(const Node& n){
+  if(editingAppearance||stopping)return;
+  editingAppearance=true;
+  AppearanceDialog dialog(n.title,appearances.load(n.uid),this);
+  if(dialog.exec()==QDialog::Accepted){
+   if(!appearances.save(n.uid,dialog.value()))QMessageBox::warning(this,"Unscene","Could not save appearance settings.");
+   previous.clear();
+  }
+  editingAppearance=false;request();
+ }
+ void queueAppearance(const Node&n){QTimer::singleShot(0,this,[this,n]{editAppearance(n);});}
  static constexpr int maxDepth=24;
  void updateSnapshots(){
   if(!isVisible())return;
   for(const auto&n:previous){
    auto label=labels.value(n.key);
-   if(!n.video||!label||thumbnails.contains(n.uid)||!scroll->viewport()->rect().intersects(QRect(label->mapTo(scroll->viewport(),QPoint()),label->size())))continue;
+   if(artworkOverrides.contains(n.uid)||!n.video||!label||thumbnails.contains(n.uid)||!scroll->viewport()->rect().intersects(QRect(label->mapTo(scroll->viewport(),QPoint()),label->size())))continue;
    auto s=source(n.uid);if(!s||!obs_source_showing(s.get()))continue;
    if(attempted.contains(n.uid)&&clock.elapsed()-attempted.value(n.uid)<3000)continue;
    attempted.insert(n.uid,clock.elapsed());
@@ -79,7 +100,7 @@ class Dock : public QWidget {
  }
  void render(const QVector<Node>&nodes){
   const int pos=scroll->verticalScrollBar()->value();
-  labels.clear();keys.clear();
+  labels.clear();keys.clear();artworkOverrides.clear();
   while(auto *it=rows->takeAt(0)){delete it->widget();delete it;}
   for(const auto&n:nodes){
    const bool isOpen=opened.contains(n.key), expanded=selected==n.key;
@@ -92,9 +113,15 @@ class Dock : public QWidget {
    labels.insert(n.key,r->thumb);keys.insert(n.uid,n.key);
    if(thumbnails.contains(n.uid))r->thumb->setPixmap(thumbnails.value(n.uid).scaled(r->thumb->size(),Qt::KeepAspectRatio,Qt::SmoothTransformation));
    if(n.program||n.preview||expanded){r->setAutoFillBackground(true);r->setBackgroundRole(QPalette::AlternateBase);}
+   const auto appearance=appearances.load(n.uid);
+   const auto art=appearancePixmap(appearance,r->palette(),r->thumb->size());
+   if(!art.isNull()){artworkOverrides.insert(n.uid);r->thumb->setPixmap(art);}
+   r->setAccent(appearance.color);
+   r->onAppearance=[this,n]{queueAppearance(n);};
    r->onBody=[this,n]{toggle(n);};
    if(n.scene){
     r->addHover(obs_frontend_preview_program_mode_active()?"Select preview scene":"Activate scene",QStyle::SP_ArrowRight,[this,n]{auto s=source(n.uid);if(!s||!obs_scene_from_source(s.get()))return;if(obs_frontend_preview_program_mode_active())obs_frontend_set_current_preview_scene(s.get());else obs_frontend_set_current_scene(s.get());request();});
+    r->addHover("Appearance",QStyle::SP_FileDialogInfoView,[this,n]{queueAppearance(n);});
    }else{
     r->addHover(n.visible?"Hide source":"Show source",n.visible?QStyle::SP_DialogYesButton:QStyle::SP_DialogNoButton,[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_visible(i,!obs_sceneitem_visible(i));});},!n.visible);
     r->addHover(n.locked?"Unlock source":"Lock source",n.locked?QStyle::SP_DialogApplyButton:QStyle::SP_DialogResetButton,[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_locked(i,!obs_sceneitem_locked(i));});},n.locked);
@@ -102,6 +129,7 @@ class Dock : public QWidget {
     r->addSecondary("Filters",QStyle::SP_FileDialogContentsView,[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_filters(s.get());});
     r->addSecondary("Move up",QStyle::SP_ArrowUp,[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_order(i,OBS_ORDER_MOVE_UP);});});
     r->addSecondary("Move down",QStyle::SP_ArrowDown,[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_order(i,OBS_ORDER_MOVE_DOWN);});});
+    r->addSecondary("Appearance",QStyle::SP_FileDialogInfoView,[this,n]{queueAppearance(n);});
     if(n.audio)r->addSecondary("Toggle mute",QStyle::SP_MediaVolume,[n]{auto s=source(n.uid);if(s)obs_source_set_muted(s.get(),!obs_source_muted(s.get()));});
    }
    rows->addWidget(r);
@@ -124,7 +152,7 @@ public:
  }
  void stop(){stopping=true;timer.stop();}
  void refresh(){
-  if(stopping||!isVisible())return;
+  if(stopping||editingAppearance||!isVisible())return;
   char *raw=obs_frontend_get_current_scene_collection();QString now=QString::fromUtf8(raw?raw:"");bfree(raw);
   if(collection!=now){collection=now;thumbnails.clear();attempted.clear();opened.clear();selected.clear();initialized=false;previous.clear();}
   Source live(obs_frontend_get_current_scene(),obs_source_release);

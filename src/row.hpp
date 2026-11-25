@@ -8,6 +8,8 @@
 #include <QMouseEvent>
 #include <QStyle>
 #include <QVector>
+#include <QPainter>
+#include <QContextMenuEvent>
 #include <functional>
 
 class Row : public QWidget {
@@ -15,7 +17,9 @@ public:
  QLabel *name, *thumb;
  QWidget *secondary;
  QVector<QToolButton*> hoverButtons, secondaryButtons;
- std::function<void()> onBody;
+ std::function<void()> onBody,onAppearance;
+ void setAccent(const QColor &color){accentColor=color;update();}
+ QColor accent()const{return accentColor;}
  Row(const QString &title,bool scene,bool open,int depth,QWidget *parent=nullptr):QWidget(parent),isScene(scene) {
   auto *outer=new QVBoxLayout(this); outer->setContentsMargins(depth*12+2,1,2,1); outer->setSpacing(1);
   auto *top=new QWidget(this); first=new QHBoxLayout(top); first->setContentsMargins(0,0,0,0); first->setSpacing(3); outer->addWidget(top);
@@ -36,14 +40,23 @@ public:
   auto *b=makeButton(tip,icon,std::move(action)); extra->addWidget(b); secondaryButtons.append(b);
  }
 protected:
+ void paintEvent(QPaintEvent*event) override{
+  QWidget::paintEvent(event);
+  if(!accentColor.isValid())return;
+  QPainter p(this);auto tint=accentColor;tint.setAlpha(35);p.fillRect(rect(),tint);
+  p.fillRect(QRect(0,1,3,qMax(0,height()-2)),accentColor);
+ }
+ void contextMenuEvent(QContextMenuEvent*event)override{if(onAppearance){onAppearance();event->accept();}else QWidget::contextMenuEvent(event);}
  void enterEvent(QEnterEvent *e) override {for(auto*b:hoverButtons)b->show(); QWidget::enterEvent(e);}
  void leaveEvent(QEvent *e) override {for(auto*b:hoverButtons)b->setVisible(b->property("always").toBool()); QWidget::leaveEvent(e);}
  bool eventFilter(QObject *o,QEvent *e) override {
+  if((o==name||o==thumb)&&e->type()==QEvent::ContextMenu&&onAppearance){onAppearance();return true;}
   if((o==name||o==thumb)&&e->type()==QEvent::MouseButtonRelease&&static_cast<QMouseEvent*>(e)->button()==Qt::LeftButton) {if(onBody)onBody(); return true;}
   return QWidget::eventFilter(o,e);
  }
 private:
  bool isScene, opened=false;
+ QColor accentColor;
  QHBoxLayout *first,*extra;
  QToolButton* makeButton(const QString &tip,QStyle::StandardPixmap icon,std::function<void()> action) {
   auto*b=new QToolButton(this); b->setAutoRaise(true); b->setIcon(style()->standardIcon(icon)); b->setIconSize(QSize(15,15)); b->setFixedSize(23,23); b->setToolTip(tip); b->setAccessibleName(tip);
