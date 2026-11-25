@@ -1,4 +1,6 @@
-# SceneTree
+# Unscene
+
+**Scenes and sources, unfolded.**
 
 A standalone, native Qt dock for OBS that combines Scenes and Sources. Scene rows expand independently; the hover arrow activates a scene (selects preview in Studio Mode). Source rows expose visibility, lock and properties on hover, with a second row for filters, ordering and audio mute where applicable. Groups can expand. It uses the OBS theme's palette and standard icons.
 
@@ -9,9 +11,11 @@ Snapshots are cached by source UUID, captured only for visible rows whose source
 cmake -S . -B build -Dlibobs_DIR=/usr/local/lib/cmake/libobs -Dobs-frontend-api_DIR=/usr/local/lib/cmake/obs-frontend-api
 cmake --build build
 ctest --test-dir build --output-on-failure
-cmake --install build --prefix "$HOME/.config/obs-studio/plugins/scene-tree"
+cmake --install build --prefix "$HOME/.config/obs-studio/plugins/unscene"
 ```
-Restart OBS and enable the Scenes & Sources dock from Docks. Existing docks are unaffected.
+Restart OBS and enable the Unscene dock from Docks. Existing docks are unaffected.
+
+First prototype screenshot (before the rename):
 
 ![Expanded source with cached thumbnails](docs/screenshots/expanded.png)
 

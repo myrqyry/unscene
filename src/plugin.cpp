@@ -16,7 +16,7 @@
 #include <QElapsedTimer>
 
 OBS_DECLARE_MODULE()
-MODULE_EXPORT const char *obs_module_name(void){return "SceneTree";}
+MODULE_EXPORT const char *obs_module_name(void){return "Unscene";}
 MODULE_EXPORT const char *obs_module_description(void){return "Combined scene and source explorer";}
 namespace {
 using Source=std::unique_ptr<obs_source_t,decltype(&obs_source_release)>;
@@ -110,7 +110,7 @@ class Dock : public QWidget {
  }
 public:
  Dock(){
-  setObjectName("SceneTreeContent");
+  setObjectName("UnsceneContent");
   auto*l=new QVBoxLayout(this);l->setContentsMargins(2,2,2,2);l->setSpacing(2);
   auto*bar=new QHBoxLayout; auto*collapse=new QToolButton(this);collapse->setIcon(style()->standardIcon(QStyle::SP_ArrowUp));collapse->setToolTip("Collapse all scenes");
   auto*expand=new QToolButton(this);expand->setIcon(style()->standardIcon(QStyle::SP_ArrowDown));expand->setToolTip("Expand all scenes");
@@ -144,5 +144,5 @@ public:
 QPointer<Dock> dock;
 void event(obs_frontend_event e,void*){if(e==OBS_FRONTEND_EVENT_EXIT&&dock)dock->stop();}
 }
-bool obs_module_load(void){dock=new Dock;if(!obs_frontend_add_dock_by_id("scene-tree.dock","Scenes & Sources",dock)){delete dock;return false;}obs_frontend_add_event_callback(event,nullptr);return true;}
-void obs_module_unload(void){obs_frontend_remove_event_callback(event,nullptr);if(dock){dock->stop();obs_frontend_remove_dock("scene-tree.dock");}}
+bool obs_module_load(void){dock=new Dock;if(!obs_frontend_add_dock_by_id("unscene.dock","Unscene",dock)){delete dock;return false;}obs_frontend_add_event_callback(event,nullptr);return true;}
+void obs_module_unload(void){obs_frontend_remove_event_callback(event,nullptr);if(dock){dock->stop();obs_frontend_remove_dock("unscene.dock");}}
