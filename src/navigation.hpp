@@ -52,6 +52,8 @@ public:
   auto list=opened.values();std::sort(list.begin(),list.end());
   settings.setValue(key(collection),list);settings.sync();return settings.status()==QSettings::NoError;
  }
+ int motionDuration()const{int v=settings.value("motion/duration",150).toInt();return v==0?0:v==90?90:150;}
+ bool saveMotion(int ms){settings.setValue("motion/duration",ms==0?0:ms==90?90:150);settings.sync();return settings.status()==QSettings::NoError;}
  Density sceneDensity()const{return density("density/scenes");}
  Density sourceDensity()const{return density("density/sources");}
  bool saveDensity(Density scenes,Density sources){

@@ -20,6 +20,9 @@ Search the scene collection by name, including sources inside collapsed scenes a
 
 ![Large scene thumbnails and compact source icons](docs/screenshots/mixed-density.png)
 
+## Motion
+Unscene uses short, interruptible Qt transitions for scene/group expansion, source secondary controls, search results, hover buttons, disclosure chevrons and snapshot refresh feedback. Unchanged rows are retained instead of recreated. Dock settings → Animations offers Off, Fast (90 ms) and Smooth (150 ms, default), persisted independently of the scene collection. Large structural changes skip row animation; snapshot capture waits until layout transitions settle. Motion is limited to Unscene's own widgets, not native OBS menus or dialogs.
+
 ## Source management
 Hover a scene and click the plus button (or right-click it) to open the searchable source picker. Existing sources are added as shared references; New source lists available input types and prompts for a unique name. New configurable sources open their native properties.
 

@@ -124,6 +124,29 @@ class Dock : public QWidget {
  QString query;
  bool dirty=true;
  QSet<QString> sceneKeys,snapshotKeys;
+ struct RowEntry{Node node;Row*row;Reveal*shell;};
+ QHash<QString,RowEntry> rowEntries;
+ QVector<QString> rowOrder;
+ QVector<QPointer<Reveal>> retiring;
+ QVector<GlyphButton*> toolbar;
+ int motionDuration=navigation.motionDuration();
+ bool resetRows=false,animateStructure=false;
+ void finishRetiring(){
+  for(auto shell:retiring)if(shell){shell->onSettled={};rows->removeWidget(shell);delete shell;}
+  retiring.clear();
+ }
+ bool layoutMoving()const{
+  for(auto shell:retiring)if(shell&&shell->moving())return true;
+  for(const auto&e:rowEntries)if(e.shell->moving()||e.row->motionActive())return true;
+  return false;
+ }
+ void setMotion(int ms){
+  motionDuration=ms;navigation.saveMotion(ms);
+  if(!ms)finishRetiring();
+  for(auto&e:rowEntries){e.row->setMotionDuration(ms);if(!ms)e.shell->finish();}
+  for(auto*b:toolbar)b->setMotionDuration(ms);
+ }
+
  bool searching()const{return !query.trimmed().isEmpty();}
  Density density(const Node&n)const{return n.scene?sceneDensity:sourceDensity;}
  void saveOpened(){if(!collection.isEmpty()&&!navigation.saveOpened(collection,opened))blog(LOG_WARNING,"[Unscene] Could not save expansion settings");}
@@ -143,6 +166,8 @@ class Dock : public QWidget {
     connect(a,&QAction::triggered,this,[this,scenes,d]{changeDensity(scenes,d);});
    }
   }
+  auto*motion=menu.addMenu("Animations");auto*motionGroup=new QActionGroup(motion);
+  for(int ms:{0,90,150}){auto*a=motion->addAction(ms==0?"Off":ms==90?"Fast":"Smooth");a->setCheckable(true);a->setChecked(ms==motionDuration);motionGroup->addAction(a);connect(a,&QAction::triggered,this,[this,ms]{setMotion(ms);});}
   menu.exec(anchor->mapToGlobal(QPoint(0,anchor->height())));
  }
  QSet<QString> artworkOverrides;
@@ -430,7 +455,7 @@ class Dock : public QWidget {
  void queueAppearance(const Node&n){QTimer::singleShot(0,this,[this,n]{editAppearance(n);});}
  static constexpr int maxDepth=24;
  void updateSnapshots(){
-  if(!isVisible())return;
+  if(!isVisible()||layoutMoving())return;
   for(const auto&n:previous){
    auto label=labels.value(n.key);
    if(!snapshotKeys.contains(n.key)||artworkOverrides.contains(n.uid)||!n.video||!label||thumbnails.contains(n.uid)||!scroll->viewport()->rect().intersects(QRect(label->mapTo(scroll->viewport(),QPoint()),label->size())))continue;
@@ -465,6 +490,7 @@ class Dock : public QWidget {
  }
  void request(){if(pending||stopping)return;pending=true;QTimer::singleShot(0,this,[this]{pending=false;refresh();});}
  void toggle(const Node &n){
+  animateStructure=true;
   if((n.scene||n.group)&&!searching()){if(opened.contains(n.key))opened.remove(n.key);else opened.insert(n.key);saveOpened();}
   if(!n.scene)selected=selected==n.key?QString():n.key;
   dirty=true;request();
@@ -472,10 +498,44 @@ class Dock : public QWidget {
  void render(const QVector<Node>&nodes){
   const int pos=scroll->verticalScrollBar()->value();
   labels.clear();keys.clear();artworkOverrides.clear();snapshotKeys.clear();
-  while(auto *it=rows->takeAt(0)){delete it->widget();delete it;}
+  finishRetiring();
+  int changes=0;QSet<QString> nextKeys;
+  for(const auto&n:nodes){nextKeys.insert(n.key);if(!rowEntries.contains(n.key))++changes;}
+  for(auto it=rowEntries.cbegin();it!=rowEntries.cend();++it)if(!nextKeys.contains(it.key()))++changes;
+  const bool animate=animateStructure&&!resetRows&&motionDuration&&changes<=24&&nodes.size()+rowEntries.size()<=96;
+  animateStructure=false;
+  QSet<QString> incoming;for(const auto&n:nodes)incoming.insert(n.key);
+  QHash<QString,Reveal*> exits;
+  for(auto it=rowEntries.begin();it!=rowEntries.end();){
+   if(resetRows||!incoming.contains(it.key())){
+    auto*shell=it->shell;
+    if(animate){exits.insert(it.key(),shell);shell->setEnabled(false);}
+    else{rows->removeWidget(shell);delete shell;}
+    it=rowEntries.erase(it);
+   }else ++it;
+  }
+  resetRows=false;
+  while(auto*it=rows->takeAt(0)){auto*w=it->widget();if(w&&w->property("unsceneEmpty").toBool())delete w;delete it;}
+  QVector<QString> nextOrder;
+  int index=0;
+  auto insertExitsBefore=[&](const QString&key){
+   if(rowOrder.indexOf(key,index)<0)return;
+   while(index<rowOrder.size()&&rowOrder[index]!=key){auto*shell=exits.take(rowOrder[index++]);if(shell)rows->addWidget(shell);}
+   if(index<rowOrder.size())++index;
+  };
   for(const auto&n:nodes){
    const bool isOpen=searching()||opened.contains(n.key), expanded=selected==n.key;
-   auto *r=new Row(n.title,n.scene,expanded,n.depth,body);
+   auto found=rowEntries.find(n.key);
+   bool fresh=found==rowEntries.end(),created=fresh;
+   if(!fresh&&!(found->node==n)){rows->removeWidget(found->shell);delete found->shell;rowEntries.erase(found);fresh=true;}
+   Row*r;Reveal*shell;
+   if(fresh){
+    r=new Row(n.title,n.scene,expanded,n.depth);
+    shell=new Reveal(r,body,true);
+    rowEntries.insert(n.key,{n,r,shell});
+   }else{r=found->row;shell=found->shell;}
+   r->setMotionDuration(fresh?0:motionDuration);
+   r->setExpanded(expanded);
    r->setNativeList(nativeList);
    r->setDisclosure(n.scene||n.group,isOpen);
    r->thumb->setFixedSize(thumbnailSize(density(n),n.scene));
@@ -489,6 +549,7 @@ class Dock : public QWidget {
    const auto art=appearancePixmap(appearance,artworkPalette(r),r->thumb->size());
    if(!art.isNull()){artworkOverrides.insert(n.uid);r->thumb->setPixmap(art);}
    r->setAccent(appearance.color);
+   if(fresh){
    r->onAppearance=[this,n]{queueNativeContext(n);};
    r->onBody=[this,n]{toggle(n);};
    if(n.scene){
@@ -505,10 +566,28 @@ class Dock : public QWidget {
     r->addSecondary("More actions","more",[this,n]{queueContext(n);});
     if(n.audio)r->addSecondary("Toggle mute",n.muted?"mute":"volume",[n]{auto s=source(n.uid);if(s)obs_source_set_muted(s.get(),!obs_source_muted(s.get()));});
    }
-   rows->addWidget(r);
+   }
+   r->setMotionDuration(motionDuration);
+   if(animate&&!created)insertExitsBefore(n.key);
+   rows->addWidget(shell);
+   if(animate&&created){shell->setOpen(false,0);shell->setOpen(true,motionDuration);}
+   else if(created)shell->show();
+   else if(!shell->isOpen())shell->setOpen(true,0);
+   nextOrder.append(n.key);
   }
+  for(const auto&key:rowOrder)if(auto*shell=exits.take(key))rows->addWidget(shell);
+  for(auto*shell:exits)rows->addWidget(shell);
+  // Exiting rows remain clipped at their old position until the finite animation ends.
+  for(int i=0;i<rows->count();++i){
+   auto*shell=dynamic_cast<Reveal*>(rows->itemAt(i)->widget());
+   if(!shell||shell->isEnabled())continue;
+   retiring.append(shell);
+   shell->onSettled=[shell](bool open){if(!open)shell->deleteLater();};
+   shell->setOpen(false,motionDuration);
+  }
+  rowOrder=nextOrder;
   if(nodes.isEmpty()){
-   auto*empty=new QLabel(searching()?"No matching scenes or sources":"No scenes",body);empty->setAlignment(Qt::AlignCenter);empty->setContentsMargins(4,12,4,12);rows->addWidget(empty);
+   auto*empty=new QLabel(searching()?"No matching scenes or sources":"No scenes",body);empty->setProperty("unsceneEmpty",true);empty->setAlignment(Qt::AlignCenter);empty->setContentsMargins(4,12,4,12);rows->addWidget(empty);
   }
   rows->addStretch(); scroll->verticalScrollBar()->setValue(pos);
  }
@@ -520,23 +599,24 @@ public:
   auto*bar=new QHBoxLayout; collapse=new GlyphButton("collapse-all",this);collapse->setToolTip("Collapse all scenes");
   expand=new GlyphButton("expand-all",this);expand->setToolTip("Expand all scenes");
   auto*refreshButton=new GlyphButton("refresh",this);refreshButton->setToolTip("Refresh snapshots");
-  connect(refreshButton,&QToolButton::clicked,this,[this]{thumbnails.clear();attempted.clear();dirty=true;request();});
-  auto*settingsButton=new GlyphButton("properties",this);settingsButton->setToolTip("Thumbnail density");settingsButton->setAccessibleName("Thumbnail density");
+  connect(refreshButton,&QToolButton::clicked,this,[this,refreshButton]{refreshButton->spin();thumbnails.clear();attempted.clear();dirty=true;request();});
+  auto*settingsButton=new GlyphButton("properties",this);settingsButton->setToolTip("Dock settings");settingsButton->setAccessibleName("Dock settings");
+  toolbar={refreshButton,collapse,expand,settingsButton};for(auto*b:toolbar)b->setMotionDuration(motionDuration);
   connect(settingsButton,&QToolButton::clicked,this,[this,settingsButton]{densityMenu(settingsButton);});
   search=new QLineEdit(this);search->setPlaceholderText("Find scenes or sources…");search->setClearButtonEnabled(true);search->setAccessibleName("Find scenes or sources");search->setMinimumWidth(50);
   bar->addWidget(search,1);bar->addWidget(refreshButton);bar->addWidget(collapse);bar->addWidget(expand);bar->addWidget(settingsButton);l->addLayout(bar);
-  connect(search,&QLineEdit::textChanged,this,[this](const QString&t){query=t;collapse->setEnabled(!searching());expand->setEnabled(!searching());dirty=true;request();});
+  connect(search,&QLineEdit::textChanged,this,[this](const QString&t){query=t;animateStructure=true;collapse->setEnabled(!searching());expand->setEnabled(!searching());dirty=true;request();});
   scroll=new QScrollArea(this);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);body=new QWidget;rows=new QVBoxLayout(body);rows->setContentsMargins(0,0,0,0);rows->setSpacing(1);scroll->setWidget(body);l->addWidget(scroll);
-  connect(collapse,&QToolButton::clicked,this,[this]{opened.clear();selected.clear();saveOpened();dirty=true;request();});
-  connect(expand,&QToolButton::clicked,this,[this]{opened.unite(sceneKeys);saveOpened();dirty=true;request();});
+  connect(collapse,&QToolButton::clicked,this,[this]{animateStructure=true;opened.clear();selected.clear();saveOpened();dirty=true;request();});
+  connect(expand,&QToolButton::clicked,this,[this]{animateStructure=true;opened.unite(sceneKeys);saveOpened();dirty=true;request();});
   connect(&timer,&QTimer::timeout,this,[this]{refresh();});clock.start();timer.start(400);
  }
- void themeChanged(){dirty=true;request();}
+ void themeChanged(){resetRows=true;dirty=true;request();}
  void stop(){stopping=true;timer.stop();}
  void refresh(){
   if(stopping||editingAppearance||!isVisible())return;
   char *raw=obs_frontend_get_current_scene_collection();QString now=QString::fromUtf8(raw?raw:"");bfree(raw);
-  if(collection!=now){collection=now;copied.reset();thumbnails.clear();attempted.clear();opened.clear();selected.clear();initialized=false;dirty=true;}
+  if(collection!=now){resetRows=true;collection=now;copied.reset();thumbnails.clear();attempted.clear();opened.clear();selected.clear();initialized=false;dirty=true;}
   Source live(obs_frontend_get_current_scene(),obs_source_release);
   Source preview(obs_frontend_preview_program_mode_active()?obs_frontend_get_current_preview_scene():nullptr,obs_source_release);
   if(!initialized&&!now.isEmpty()){auto saved=navigation.opened(now);if(saved)opened=*saved;else if(live)opened.insert(uuid(live.get()));initialized=true;}

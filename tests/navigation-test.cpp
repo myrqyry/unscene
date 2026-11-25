@@ -19,5 +19,6 @@ int main(int argc,char**argv){
  CHECK(store.sceneDensity()==Density::Large&&store.sourceDensity()==Density::Compact);
  CHECK(thumbnailSize(Density::Compact,true)==QSize(20,20));CHECK(thumbnailSize(Density::Large,true).width()>thumbnailSize(Density::Normal,true).width());
  CHECK(thumbnailSize(Density::Large,false).width()>thumbnailSize(Density::Normal,false).width());
+ CHECK(store.motionDuration()==150);CHECK(store.saveMotion(0));{NavigationStore reloaded(path);CHECK(reloaded.motionDuration()==0);CHECK(reloaded.saveMotion(90));} CHECK(store.motionDuration()==90);
  return 0;
 }

@@ -5,6 +5,9 @@
 #include <QHash>
 #include <QStyleOptionToolButton>
 #include <QPalette>
+#include <QVariantAnimation>
+#include <QEnterEvent>
+#include <QPixmapCache>
 #include "appearance.hpp"
 
 inline QPixmap glyphPixmap(const QString &id,const QColor&color,int size,qreal dpr=1){
@@ -32,11 +35,12 @@ inline QPixmap glyphPixmap(const QString &id,const QColor&color,int size,qreal d
  {"browser","<circle cx='12' cy='12' r='9'/><ellipse cx='12' cy='12' rx='4' ry='9'/><path d='M3 12h18'/>"},
  {"color","<path d='m13 4 7 7-9 9H4v-7Zm-5 5 7 7'/>"}
  };
+ const auto key=QString("unscene:%1:%2:%3:%4").arg(id,color.name(QColor::HexArgb)).arg(size).arg(dpr);QPixmap cached;if(QPixmapCache::find(key,&cached))return cached;
  QString path=paths.value(id,iconPaths().value(id));if(path.isEmpty()||size<1)return {};
  path.replace("currentColor",color.name());
  auto svg=QString("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%1' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'>%2</svg>").arg(color.name(),path);
  QSvgRenderer renderer(svg.toUtf8());QPixmap pix(qMax(1,qRound(size*dpr)),qMax(1,qRound(size*dpr)));pix.setDevicePixelRatio(dpr);pix.fill(Qt::transparent);
- QPainter p(&pix);renderer.render(&p);return pix;
+ {QPainter p(&pix);renderer.render(&p);}QPixmapCache::insert(key,pix);return pix;
 }
 inline bool hasVisiblePixels(const QImage&image){
  if(image.isNull())return false;
@@ -49,18 +53,44 @@ inline QColor mixColor(const QColor&a,const QColor&b,qreal t){
 }
 class GlyphButton:public QToolButton{
  QString glyph; QColor ink;
+ QVariantAnimation hoverMotion,angleMotion,alphaMotion;
+ qreal hover=0,angle=0,alpha=1;
+ int duration=0;
+ bool actionWanted=true;
+ void animate(QVariantAnimation&a,qreal from,qreal to){
+  a.stop();a.setStartValue(from);a.setEndValue(to);a.setDuration(qMax(1,duration));a.start();
+ }
 public:
  explicit GlyphButton(QString id,QWidget*parent=nullptr):QToolButton(parent),glyph(std::move(id)){
   setAutoRaise(true);setCursor(Qt::PointingHandCursor);setFixedSize(22,22);setIconSize(QSize(16,16));setAttribute(Qt::WA_Hover);
+  for(auto*a:{&hoverMotion,&angleMotion,&alphaMotion})a->setEasingCurve(QEasingCurve::OutCubic);
+  connect(&hoverMotion,&QVariantAnimation::valueChanged,this,[this](auto v){hover=v.toReal();update();});
+  connect(&angleMotion,&QVariantAnimation::valueChanged,this,[this](auto v){angle=v.toReal();update();});
+  connect(&alphaMotion,&QVariantAnimation::valueChanged,this,[this](auto v){alpha=v.toReal();update();});
+  connect(&alphaMotion,&QVariantAnimation::finished,this,[this]{if(!actionWanted)hide();});
  }
+ void setMotionDuration(int ms){duration=ms;if(!ms){hoverMotion.stop();angleMotion.stop();alphaMotion.stop();hover=underMouse()?1:0;angle=angleMotion.endValue().isValid()?angleMotion.endValue().toReal():angle;alpha=actionWanted?1:0;if(property("always").isValid()){setVisible(actionWanted);setAttribute(Qt::WA_TransparentForMouseEvents,!actionWanted);}update();}}
+ void setAngle(qreal to){if(angle==to&&!angleMotion.state())return;if(!duration||!isVisible()){angleMotion.stop();angle=to;angleMotion.setEndValue(to);update();}else if(!angleMotion.state()||angleMotion.endValue().toReal()!=to)animate(angleMotion,angle,to);}
+ void revealAction(bool showAction){
+  actionWanted=showAction;
+  if(!duration||!parentWidget()||!parentWidget()->isVisible()){alphaMotion.stop();alpha=showAction?1:0;setVisible(showAction);setAttribute(Qt::WA_TransparentForMouseEvents,!showAction);update();return;}
+  setAttribute(Qt::WA_TransparentForMouseEvents,!showAction);
+  if(showAction&&isHidden()){alpha=0;show();}
+  if(!showAction&&isHidden())return;
+  if(alpha==qreal(showAction)){alphaMotion.stop();if(!showAction)hide();return;}
+  animate(alphaMotion,alpha,showAction?1:0);
+ }
+ void spin(){if(!duration)return;angleMotion.stop();angle=0;animate(angleMotion,0,360);}
  void setGlyph(const QString&id){if(glyph!=id){glyph=id;update();}}
  void setInk(const QColor&c){if(ink!=c){ink=c;update();}}
 protected:
+ void enterEvent(QEnterEvent*e)override{if(duration)animate(hoverMotion,hover,1);else{hover=1;update();}QToolButton::enterEvent(e);}
+ void leaveEvent(QEvent*e)override{if(duration)animate(hoverMotion,hover,0);else{hover=0;update();}QToolButton::leaveEvent(e);}
  void paintEvent(QPaintEvent*)override{
-  QPainter p(this);p.setRenderHint(QPainter::Antialiasing);
+  QPainter p(this);p.setRenderHint(QPainter::Antialiasing);p.setOpacity(alpha);
   const auto fg=ink.isValid()?ink:palette().color(isEnabled()?QPalette::Active:QPalette::Disabled,QPalette::WindowText);
-  if(underMouse()||isDown()||hasFocus()){auto fill=fg;fill.setAlpha(isDown()?52:24);p.setPen(Qt::NoPen);p.setBrush(fill);p.drawRoundedRect(rect().adjusted(1,1,-1,-1),4,4);}
+  if(hover>0||isDown()||hasFocus()){auto fill=fg;fill.setAlpha(isDown()?52:qRound(24*qMax(hover,hasFocus()?1.0:0.0)));p.setPen(Qt::NoPen);p.setBrush(fill);p.drawRoundedRect(rect().adjusted(1,1,-1,-1),4,4);}
   if(hasFocus()){QPen pen(fg);pen.setStyle(Qt::DotLine);p.setPen(pen);p.setBrush(Qt::NoBrush);p.drawRoundedRect(rect().adjusted(1,1,-1,-1),4,4);}
-  int size=iconSize().width();const auto pix=glyphPixmap(glyph,fg,size,devicePixelRatioF());p.drawPixmap(QPoint((width()-size)/2,(height()-size)/2),pix);
+  int size=iconSize().width();const auto pix=glyphPixmap(glyph,fg,size,devicePixelRatioF());p.translate(width()/2.0,height()/2.0);p.rotate(angle);p.drawPixmap(QPoint(-size/2,-size/2),pix);
  }
 };
