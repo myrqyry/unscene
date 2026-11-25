@@ -18,6 +18,9 @@
 #include "source-picker.hpp"
 #include "item-copy.hpp"
 #include "native-menu.hpp"
+#include "item-menu.hpp"
+#include <QGuiApplication>
+#include <QScreen>
 #include <QListWidget>
 #include <QItemSelectionModel>
 #include <QMetaMethod>
@@ -315,6 +318,55 @@ class Dock : public QWidget {
    dirty=true;request();
   });
  }
+ void addTargetActions(QMenu&menu,const Node&n,const QString&expected){
+  auto src=source(n.uid);if(!src||obs_source_removed(src.get()))return;
+  auto addSourceAction=[&](QMenu*where,const QString&label,std::function<void(obs_source_t*)> fn){
+   auto*a=where->addAction(label);connect(a,&QAction::triggered,this,[this,n,expected,fn]{
+    if(!sameCollection(expected))return;
+    auto s=source(n.uid);if(s&&!obs_source_removed(s.get()))fn(s.get());
+   });return a;
+  };
+  const auto flags=obs_source_get_output_flags(src.get());
+  if(n.scene||(flags&OBS_SOURCE_VIDEO)){
+   auto*project=menu.addMenu(n.scene?"Open scene projector":"Open source projector");
+   auto projector=[n](obs_source_t*s,int monitor){obs_frontend_open_projector(n.scene?"Scene":"Source",monitor,nullptr,obs_source_get_name(s));};
+   auto screens=QGuiApplication::screens();
+   for(int i=0;i<screens.size();++i)addSourceAction(project,QString("Display %1 — %2").arg(i+1).arg(screens[i]->name()),[projector,i](auto*s){projector(s,i);});
+   addSourceAction(project,"Windowed projector",[projector](auto*s){projector(s,-1);});
+   addSourceAction(&menu,n.scene?"Save scene screenshot":"Save source screenshot",[](auto*s){obs_frontend_take_source_screenshot(s);});
+  }
+  if(n.scene){
+   addSourceAction(&menu,"Filters",[](auto*s){obs_frontend_open_source_filters(s);});
+   return;
+  }
+  if(flags&OBS_SOURCE_INTERACTION)addSourceAction(&menu,"Interact",[](auto*s){obs_frontend_open_source_interaction(s);});
+  auto mutate=[this,n,expected](std::function<void(obs_sceneitem_t*)>fn){
+   if(!sameCollection(expected))return;
+   itemAction(n,[this,n,fn](auto*i){fn(i);changedScene(n.key);});
+  };
+  itemAction(n,[&](auto*i){
+   auto itemToggle=[&](const QString&label,bool checked,std::function<void(obs_sceneitem_t*)>fn){
+    auto*a=menu.addAction(label);a->setCheckable(true);a->setChecked(checked);connect(a,&QAction::triggered,this,[mutate,fn]{mutate(fn);});
+   };
+   menu.addSeparator();
+   itemToggle("Visible",obs_sceneitem_visible(i),[](auto*x){obs_sceneitem_set_visible(x,!obs_sceneitem_visible(x));});
+   itemToggle("Locked",obs_sceneitem_locked(i),[](auto*x){obs_sceneitem_set_locked(x,!obs_sceneitem_locked(x));});
+   auto*order=menu.addMenu("Order");
+   for(auto c:QVector<MenuChoice>{{"Move up",OBS_ORDER_MOVE_UP},{"Move down",OBS_ORDER_MOVE_DOWN},{"Move to top",OBS_ORDER_MOVE_TOP},{"Move to bottom",OBS_ORDER_MOVE_BOTTOM}}){
+    auto*a=order->addAction(c.label);connect(a,&QAction::triggered,this,[mutate,c]{mutate([c](auto*x){obs_sceneitem_set_order(x,static_cast<obs_order_movement>(c.value));});});
+   }
+   if(!(flags&OBS_SOURCE_VIDEO))return;
+   choiceMenu(&menu,"Scale filtering",scaleChoices(),obs_sceneitem_get_scale_filter(i),[mutate](int v){mutate([v](auto*x){obs_sceneitem_set_scale_filter(x,static_cast<obs_scale_type>(v));});});
+   choiceMenu(&menu,"Blending mode",blendChoices(),obs_sceneitem_get_blending_mode(i),[mutate](int v){mutate([v](auto*x){obs_sceneitem_set_blending_mode(x,static_cast<obs_blending_type>(v));});});
+   choiceMenu(&menu,"Blending method",blendMethodChoices(),obs_sceneitem_get_blending_method(i),[mutate](int v){mutate([v](auto*x){obs_sceneitem_set_blending_method(x,static_cast<obs_blending_method>(v));});});
+   auto*transform=menu.addMenu("Transform");
+   auto*reset=transform->addAction("Reset transform…");reset->setEnabled(!obs_sceneitem_locked(i));
+   connect(reset,&QAction::triggered,this,[this,mutate]{
+    if(QMessageBox::question(this,"Reset transform","Reset position, scale, rotation, bounds and crop? This action is not in OBS Undo.",QMessageBox::Yes|QMessageBox::Cancel,QMessageBox::Cancel)!=QMessageBox::Yes)return;
+    mutate([](auto*x){if(obs_sceneitem_locked(x))return;auto t=resetTransform();obs_sceneitem_crop crop{};obs_sceneitem_defer_update_begin(x);obs_sceneitem_set_info2(x,&t);obs_sceneitem_set_crop(x,&crop);obs_sceneitem_defer_update_end(x);});
+   });
+  });
+ }
  void contextMenu(const Node&n,const QPoint&pos,bool nativeFallback=false){
   if(editingAppearance||stopping)return;
   auto expected=collection;
@@ -350,13 +402,14 @@ class Dock : public QWidget {
   }else{
    auto*props=menu.addAction("Properties");connect(props,&QAction::triggered,this,[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_properties(s.get());});
    auto*filters=menu.addAction("Filters");connect(filters,&QAction::triggered,this,[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_filters(s.get());});
-   auto*transform=menu.addAction("Edit transform");connect(transform,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))itemAction(n,[](auto*i){obs_frontend_open_sceneitem_edit_transform(i);});});
+   auto*transform=menu.addAction("Edit transform");transform->setEnabled(n.key.section('/',0,0)==editingSceneUid());connect(transform,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))itemAction(n,[](auto*i){obs_frontend_open_sceneitem_edit_transform(i);});});
    if(!n.group){
     menu.addSeparator();
     auto*copy=menu.addAction("Copy source");auto input=source(n.uid);copy->setEnabled(input&&!obs_source_is_scene(input.get()));connect(copy,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))itemAction(n,[this](auto*i){copied=ItemCopy::capture(i);if(copied)obs_frontend_copy_sceneitem(i);});});
     auto*remove=menu.addAction("Remove from scene…");connect(remove,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))QTimer::singleShot(0,this,[this,n]{removeItem(n);});});
    }
   }
+  addTargetActions(menu,n,expected);
   menu.addSeparator();
   auto*rename=menu.addAction("Rename…");connect(rename,&QAction::triggered,this,[this,n]{QTimer::singleShot(0,this,[this,n]{renameSource(n);});});
   auto*appearance=menu.addAction("Appearance…");connect(appearance,&QAction::triggered,this,[this,n]{queueAppearance(n);});
