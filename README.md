@@ -6,6 +6,13 @@ A standalone, native Qt dock for OBS that combines Scenes and Sources. Scene row
 
 Snapshots are cached by source UUID, captured only for visible rows whose source is already showing, with at most one attempt per 400 ms timer cycle. No forced source activation; unavailable snapshots retain icons. Refresh snapshots manually via the toolbar. Snapshots are currently session-only and do not automatically track changes to content.
 
+## Theme integration
+Unscene inherits the active OBS theme palette and native list selection/hover rendering. Default source artwork uses the OBS main window's theme icon properties when available, with semantic palette-colored fallbacks. Action glyphs, disclosure arrows, labels, and selected text follow the palette; custom row colors remain optional. File and color dialogs use in-process Qt styling. Theme change events invalidate the row presentation without changing source state.
+
+![Fluffy Dark](docs/screenshots/fluffy-dark.png)
+
+![Rose Pine Dawn — Pine](docs/screenshots/rose-pine-dawn.png)
+
 ## Custom appearance
 Right-click any scene or source row, or use its Appearance action. Choose automatic artwork, one of 13 built-in line icons, or import a local image/icon file. Choose a row color independently; Clear restores the theme color and Reset restores both defaults. Confirm with OK.
 

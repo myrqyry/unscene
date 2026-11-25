@@ -47,7 +47,7 @@ public:
   auto*hint=new QLabel("Applies to this scene or source everywhere in Unscene. Does not change OBS output.",this);hint->setWordWrap(true);l->addWidget(hint);
   auto*buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel|QDialogButtonBox::Reset,this);l->addWidget(buttons);
   auto chooseImage=[this]{
-   auto path=QFileDialog::getOpenFileName(this,"Choose artwork",QString(),"Images (*.png *.jpg *.jpeg *.webp *.bmp *.svg *.ico);;All files (*)");
+   auto path=QFileDialog::getOpenFileName(this,"Choose artwork",QString(),"Images (*.png *.jpg *.jpeg *.webp *.bmp *.svg *.ico);;All files (*)",nullptr,QFileDialog::DontUseNativeDialog);
    if(path.isEmpty())return false;
    auto image=importArtwork(path);
    if(image.isEmpty()){QMessageBox::warning(this,"Unscene","Could not read this image, or it exceeds the import limit.");return false;}
@@ -64,7 +64,7 @@ public:
   });
   connect(importButton,&QPushButton::clicked,this,[chooseImage]{chooseImage();});
   connect(colorButton,&QPushButton::clicked,this,[this]{
-   auto color=QColorDialog::getColor(draft.color.isValid()?draft.color:palette().color(QPalette::Highlight),this,"Row color");
+   auto color=QColorDialog::getColor(draft.color.isValid()?draft.color:palette().color(QPalette::Highlight),this,"Row color",QColorDialog::DontUseNativeDialog);
    if(color.isValid()){draft.color=color;updatePreview();}
   });
   connect(clearColor,&QPushButton::clicked,this,[this]{draft.color=QColor();updatePreview();});

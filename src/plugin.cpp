@@ -15,6 +15,8 @@
 #include "snapshot.hpp"
 #include "appearance-dialog.hpp"
 #include <QDir>
+#include <QMetaProperty>
+#include <QIcon>
 #include <QElapsedTimer>
 
 OBS_DECLARE_MODULE()
@@ -25,18 +27,74 @@ using Source=std::unique_ptr<obs_source_t,decltype(&obs_source_release)>;
 Source source(const QString &uuid){return Source(obs_get_source_by_uuid(uuid.toUtf8().constData()),obs_source_release);}
 QString uuid(obs_source_t*s){return s?QString::fromUtf8(obs_source_get_uuid(s)):QString();}
 struct Node {
- QString key,uid,parent,title; int64_t id=0; int depth=0;
+ QString key,uid,parent,title; int iconType=0; bool muted=false; int64_t id=0; int depth=0;
  bool scene=false,group=false,visible=true,locked=false,program=false,preview=false,video=false,audio=false;
- bool operator==(const Node &b)const {return key==b.key&&uid==b.uid&&parent==b.parent&&title==b.title&&id==b.id&&depth==b.depth&&scene==b.scene&&group==b.group&&visible==b.visible&&locked==b.locked&&program==b.program&&preview==b.preview&&video==b.video&&audio==b.audio;}
+ bool operator==(const Node &b)const {return key==b.key&&uid==b.uid&&parent==b.parent&&title==b.title&&iconType==b.iconType&&muted==b.muted&&id==b.id&&depth==b.depth&&scene==b.scene&&group==b.group&&visible==b.visible&&locked==b.locked&&program==b.program&&preview==b.preview&&video==b.video&&audio==b.audio;}
 };
-Node makeNode(obs_source_t *s){Node n; n.uid=uuid(s); n.title=QString::fromUtf8(obs_source_get_name(s)); auto flags=obs_source_get_output_flags(s); n.video=flags&OBS_SOURCE_VIDEO; n.audio=flags&OBS_SOURCE_AUDIO; return n;}
+Node makeNode(obs_source_t *s){Node n; n.uid=uuid(s); n.title=QString::fromUtf8(obs_source_get_name(s)); auto flags=obs_source_get_output_flags(s); n.iconType=obs_source_get_icon_type(obs_source_get_id(s));n.muted=obs_source_muted(s);n.video=flags&OBS_SOURCE_VIDEO; n.audio=flags&OBS_SOURCE_AUDIO; return n;}
+QString sourceGlyph(const Node&n){
+ if(n.scene)return "layers";
+ if(n.group)return "folder";
+ switch(n.iconType){
+ case OBS_ICON_TYPE_IMAGE:case OBS_ICON_TYPE_SLIDESHOW:return "image";
+ case OBS_ICON_TYPE_COLOR:return "color";
+ case OBS_ICON_TYPE_AUDIO_INPUT:return "mic";
+ case OBS_ICON_TYPE_AUDIO_OUTPUT:case OBS_ICON_TYPE_PROCESS_AUDIO_OUTPUT:return "volume";
+ case OBS_ICON_TYPE_DESKTOP_CAPTURE:case OBS_ICON_TYPE_WINDOW_CAPTURE:return "screen";
+ case OBS_ICON_TYPE_GAME_CAPTURE:return "game";
+ case OBS_ICON_TYPE_CAMERA:return "camera";
+ case OBS_ICON_TYPE_TEXT:return "text";
+ case OBS_ICON_TYPE_MEDIA:return "media";
+ case OBS_ICON_TYPE_BROWSER:return "browser";
+ default:return n.video?"screen":n.audio?"mic":"layers";
+ }
+}
+const char* nativeIconProperty(const Node&n){
+ if(n.scene)return "sceneIcon";
+ if(n.group)return "groupIcon";
+ switch(n.iconType){
+ case OBS_ICON_TYPE_IMAGE:return "imageIcon";
+ case OBS_ICON_TYPE_COLOR:return "colorIcon";
+ case OBS_ICON_TYPE_SLIDESHOW:return "slideshowIcon";
+ case OBS_ICON_TYPE_AUDIO_INPUT:return "audioInputIcon";
+ case OBS_ICON_TYPE_AUDIO_OUTPUT:return "audioOutputIcon";
+ case OBS_ICON_TYPE_PROCESS_AUDIO_OUTPUT:return "audioProcessOutputIcon";
+ case OBS_ICON_TYPE_DESKTOP_CAPTURE:return "desktopCapIcon";
+ case OBS_ICON_TYPE_WINDOW_CAPTURE:return "windowCapIcon";
+ case OBS_ICON_TYPE_GAME_CAPTURE:return "gameCapIcon";
+ case OBS_ICON_TYPE_CAMERA:return "cameraIcon";
+ case OBS_ICON_TYPE_TEXT:return "textIcon";
+ case OBS_ICON_TYPE_MEDIA:return "mediaIcon";
+ case OBS_ICON_TYPE_BROWSER:return "browserIcon";
+ default:return "defaultIcon";
+ }
+}
+QPixmap sourceArtwork(const Node&n,Row*r){
+ auto*window=static_cast<QWidget*>(obs_frontend_get_main_window());
+ if(window){
+  const auto index=window->metaObject()->indexOfProperty(nativeIconProperty(n));
+  if(index>=0){
+   const auto value=window->metaObject()->property(index).read(window);
+   const auto icon=qvariant_cast<QIcon>(value);
+   auto pix=icon.pixmap(QSize(18,18),r->devicePixelRatioF());
+   if(!pix.isNull()){
+    if(n.program||n.preview||r->expanded()){
+     QPainter painter(&pix);painter.setCompositionMode(QPainter::CompositionMode_SourceIn);painter.fillRect(pix.rect(),r->inkColor());
+    }
+    return pix;
+   }
+  }
+ }
+ return glyphPixmap(sourceGlyph(n),r->inkColor(),18,r->devicePixelRatioF());
+}
+QPalette artworkPalette(Row*r){auto p=r->palette();p.setColor(QPalette::WindowText,r->inkColor());return p;}
 QString appearancePath(){
  char* raw=obs_module_config_path("appearance.ini");
  const auto path=QString::fromUtf8(raw?raw:"");bfree(raw);
  return path;
 }
 class Dock : public QWidget {
- QVBoxLayout *rows; QScrollArea *scroll; QWidget *body; QTimer timer;
+ QListView *nativeList; QVBoxLayout *rows; QScrollArea *scroll; QWidget *body; QTimer timer;
  QSet<QString> opened; QString selected,collection; QVector<Node> previous; bool initialized=false, pending=false, stopping=false;
  QHash<QString,QPixmap> thumbnails;
  QHash<QString,qint64> attempted;
@@ -66,7 +124,7 @@ class Dock : public QWidget {
    auto s=source(n.uid);if(!s||!obs_source_showing(s.get()))continue;
    if(attempted.contains(n.uid)&&clock.elapsed()-attempted.value(n.uid)<3000)continue;
    attempted.insert(n.uid,clock.elapsed());
-   const auto image=captureSnapshot(s.get());if(image.isNull())return;
+   const auto image=captureSnapshot(s.get());if(!hasVisiblePixels(image))return;
    if(thumbnails.size()>=512)thumbnails.clear();
    auto pix=QPixmap::fromImage(image);thumbnails.insert(n.uid,pix);
    for(const auto&key:keys.values(n.uid)){auto l=labels.value(key);if(l)l->setPixmap(pix.scaled(l->size(),Qt::KeepAspectRatio,Qt::SmoothTransformation));}
@@ -104,33 +162,32 @@ class Dock : public QWidget {
   while(auto *it=rows->takeAt(0)){delete it->widget();delete it;}
   for(const auto&n:nodes){
    const bool isOpen=opened.contains(n.key), expanded=selected==n.key;
-   QString title=n.title;
-   if(n.scene||n.group)title=(isOpen?QStringLiteral("▾ "):QStringLiteral("▸ "))+title;
-   if(n.program)title+=QStringLiteral("  • LIVE"); else if(n.preview)title+=QStringLiteral("  • PREVIEW");
-   auto *r=new Row(title,n.scene,expanded,n.depth,body);
-   auto ico=style()->standardIcon(n.scene?QStyle::SP_DirIcon:n.group?QStyle::SP_DirIcon:n.video?QStyle::SP_DesktopIcon:QStyle::SP_MediaVolume);
-   r->thumb->setPixmap(ico.pixmap(18,18));
+   auto *r=new Row(n.title,n.scene,expanded,n.depth,body);
+   r->setNativeList(nativeList);
+   r->setDisclosure(n.scene||n.group,isOpen);
+   r->setSelected(n.program||n.preview||expanded);
+   r->setStatus(n.program?"LIVE":n.preview?"PREVIEW":"");
+   r->thumb->setPixmap(sourceArtwork(n,r));
    labels.insert(n.key,r->thumb);keys.insert(n.uid,n.key);
    if(thumbnails.contains(n.uid))r->thumb->setPixmap(thumbnails.value(n.uid).scaled(r->thumb->size(),Qt::KeepAspectRatio,Qt::SmoothTransformation));
-   if(n.program||n.preview||expanded){r->setAutoFillBackground(true);r->setBackgroundRole(QPalette::AlternateBase);}
    const auto appearance=appearances.load(n.uid);
-   const auto art=appearancePixmap(appearance,r->palette(),r->thumb->size());
+   const auto art=appearancePixmap(appearance,artworkPalette(r),r->thumb->size());
    if(!art.isNull()){artworkOverrides.insert(n.uid);r->thumb->setPixmap(art);}
    r->setAccent(appearance.color);
    r->onAppearance=[this,n]{queueAppearance(n);};
    r->onBody=[this,n]{toggle(n);};
    if(n.scene){
-    r->addHover(obs_frontend_preview_program_mode_active()?"Select preview scene":"Activate scene",QStyle::SP_ArrowRight,[this,n]{auto s=source(n.uid);if(!s||!obs_scene_from_source(s.get()))return;if(obs_frontend_preview_program_mode_active())obs_frontend_set_current_preview_scene(s.get());else obs_frontend_set_current_scene(s.get());request();});
-    r->addHover("Appearance",QStyle::SP_FileDialogInfoView,[this,n]{queueAppearance(n);});
+    r->addHover(obs_frontend_preview_program_mode_active()?"Select preview scene":"Activate scene","arrow-right",[this,n]{auto s=source(n.uid);if(!s||!obs_scene_from_source(s.get()))return;if(obs_frontend_preview_program_mode_active())obs_frontend_set_current_preview_scene(s.get());else obs_frontend_set_current_scene(s.get());request();});
+    r->addHover("Appearance","appearance",[this,n]{queueAppearance(n);});
    }else{
-    r->addHover(n.visible?"Hide source":"Show source",n.visible?QStyle::SP_DialogYesButton:QStyle::SP_DialogNoButton,[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_visible(i,!obs_sceneitem_visible(i));});},!n.visible);
-    r->addHover(n.locked?"Unlock source":"Lock source",n.locked?QStyle::SP_DialogApplyButton:QStyle::SP_DialogResetButton,[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_locked(i,!obs_sceneitem_locked(i));});},n.locked);
-    r->addHover("Properties",QStyle::SP_FileDialogDetailedView,[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_properties(s.get());});
-    r->addSecondary("Filters",QStyle::SP_FileDialogContentsView,[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_filters(s.get());});
-    r->addSecondary("Move up",QStyle::SP_ArrowUp,[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_order(i,OBS_ORDER_MOVE_UP);});});
-    r->addSecondary("Move down",QStyle::SP_ArrowDown,[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_order(i,OBS_ORDER_MOVE_DOWN);});});
-    r->addSecondary("Appearance",QStyle::SP_FileDialogInfoView,[this,n]{queueAppearance(n);});
-    if(n.audio)r->addSecondary("Toggle mute",QStyle::SP_MediaVolume,[n]{auto s=source(n.uid);if(s)obs_source_set_muted(s.get(),!obs_source_muted(s.get()));});
+    r->addHover(n.visible?"Hide source":"Show source",n.visible?"eye":"eye-off",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_visible(i,!obs_sceneitem_visible(i));});},!n.visible);
+    r->addHover(n.locked?"Unlock source":"Lock source",n.locked?"lock":"unlock",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_locked(i,!obs_sceneitem_locked(i));});},n.locked);
+    r->addHover("Properties","properties",[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_properties(s.get());});
+    r->addSecondary("Filters","filters",[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_filters(s.get());});
+    r->addSecondary("Move up","up",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_order(i,OBS_ORDER_MOVE_UP);});});
+    r->addSecondary("Move down","down",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_order(i,OBS_ORDER_MOVE_DOWN);});});
+    r->addSecondary("Appearance","appearance",[this,n]{queueAppearance(n);});
+    if(n.audio)r->addSecondary("Toggle mute",n.muted?"mute":"volume",[n]{auto s=source(n.uid);if(s)obs_source_set_muted(s.get(),!obs_source_muted(s.get()));});
    }
    rows->addWidget(r);
   }
@@ -139,10 +196,11 @@ class Dock : public QWidget {
 public:
  Dock(){
   setObjectName("UnsceneContent");
+  nativeList=new QListView(this);nativeList->hide();nativeList->ensurePolished();
   auto*l=new QVBoxLayout(this);l->setContentsMargins(2,2,2,2);l->setSpacing(2);
-  auto*bar=new QHBoxLayout; auto*collapse=new QToolButton(this);collapse->setIcon(style()->standardIcon(QStyle::SP_ArrowUp));collapse->setToolTip("Collapse all scenes");
-  auto*expand=new QToolButton(this);expand->setIcon(style()->standardIcon(QStyle::SP_ArrowDown));expand->setToolTip("Expand all scenes");
-  auto*refreshButton=new QToolButton(this);refreshButton->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));refreshButton->setToolTip("Refresh snapshots");
+  auto*bar=new QHBoxLayout; auto*collapse=new GlyphButton("collapse-all",this);collapse->setToolTip("Collapse all scenes");
+  auto*expand=new GlyphButton("expand-all",this);expand->setToolTip("Expand all scenes");
+  auto*refreshButton=new GlyphButton("refresh",this);refreshButton->setToolTip("Refresh snapshots");
   connect(refreshButton,&QToolButton::clicked,this,[this]{thumbnails.clear();attempted.clear();previous.clear();request();});
   bar->addStretch();bar->addWidget(refreshButton);bar->addWidget(collapse);bar->addWidget(expand);l->addLayout(bar);
   scroll=new QScrollArea(this);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);body=new QWidget;rows=new QVBoxLayout(body);rows->setContentsMargins(0,0,0,0);rows->setSpacing(1);scroll->setWidget(body);l->addWidget(scroll);
@@ -150,6 +208,7 @@ public:
   connect(expand,&QToolButton::clicked,this,[this]{for(auto &n:previous)if(n.scene)opened.insert(n.key);previous.clear();request();});
   connect(&timer,&QTimer::timeout,this,[this]{refresh();});clock.start();timer.start(400);
  }
+ void themeChanged(){previous.clear();request();}
  void stop(){stopping=true;timer.stop();}
  void refresh(){
   if(stopping||editingAppearance||!isVisible())return;
@@ -170,7 +229,7 @@ public:
  }
 };
 QPointer<Dock> dock;
-void event(obs_frontend_event e,void*){if(e==OBS_FRONTEND_EVENT_EXIT&&dock)dock->stop();}
+void event(obs_frontend_event e,void*){if(!dock)return;if(e==OBS_FRONTEND_EVENT_EXIT)dock->stop();else if(e==OBS_FRONTEND_EVENT_THEME_CHANGED)dock->themeChanged();}
 }
 bool obs_module_load(void){dock=new Dock;if(!obs_frontend_add_dock_by_id("unscene.dock","Unscene",dock)){delete dock;return false;}obs_frontend_add_event_callback(event,nullptr);return true;}
 void obs_module_unload(void){obs_frontend_remove_event_callback(event,nullptr);if(dock){dock->stop();obs_frontend_remove_dock("unscene.dock");}}

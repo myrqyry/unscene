@@ -6,7 +6,7 @@ int main(int argc,char**argv) {
  QApplication app(argc,argv);
  int activated=0,expanded=0,properties=0;
  Row scene("Scene",true,false,0);
- scene.addHover("Activate",QStyle::SP_ArrowRight,[&]{++activated;});
+ scene.addHover("Activate","arrow-right",[&]{++activated;});
  scene.onBody=[&]{++expanded;};
  scene.show(); app.processEvents();
  QTest::mouseClick(scene.name,Qt::LeftButton);
@@ -14,7 +14,7 @@ int main(int argc,char**argv) {
  scene.hoverButtons[0]->click();
  if(activated!=1 || expanded!=1) return 2;
  Row item("Source",false,false,1);
- item.addSecondary("Properties",QStyle::SP_FileDialogDetailedView,[&]{++properties;});
+ item.addSecondary("Properties","properties",[&]{++properties;});
  item.onBody=[&]{item.setExpanded(!item.expanded());};
  item.show(); app.processEvents();
  if(item.expanded()) return 3;
