@@ -21,6 +21,7 @@
 #include "native-menu.hpp"
 #include "item-menu.hpp"
 #include "inspector.hpp"
+#include "filter-undo.hpp"
 #include <QJsonObject>
 #include <QSplitter>
 #include <QGuiApplication>
@@ -132,6 +133,61 @@ void restoreInspectorTransform(const char*data){
  auto t=TransformState::decode(obj.value("transform").toString().toUtf8());if(!ok||!t)return;
  if(withItem(obj.value("parent").toString(),id,obj.value("source").toString(),[&](auto*i){t->apply(i);}))obs_frontend_save();
 }
+Source findAttachedFilter(obs_source_t*parent,const QString&id){
+ struct C{QString id;obs_source_t*found=nullptr;}c{id};
+ obs_source_enum_filters(parent,[](obs_source_t*,obs_source_t*f,void*p){auto&c=*static_cast<C*>(p);if(uuid(f)==c.id&&!c.found)c.found=obs_source_get_ref(f);},&c);
+ return Source(c.found,obs_source_release);
+}
+int filterCount(obs_source_t*parent){
+ int count=0;obs_source_enum_filters(parent,[](obs_source_t*,obs_source_t*,void*p){++*static_cast<int*>(p);},&count);return count;
+}
+QJsonValue savedFilter(obs_source_t*parent,obs_source_t*filter){
+ std::unique_ptr<obs_data_t,decltype(&obs_data_release)> data(obs_save_source(filter),obs_data_release);
+ if(!data)return {};
+ return QJsonObject{{"index",obs_source_filter_get_index(parent,filter)},{"source",QJsonDocument::fromJson(obs_data_get_json(data.get())).object()}};
+}
+void restoreFilterUndo(const char*data){
+ auto u=FilterUndo::decode(data);if(!u||u->collection!=currentCollection())return;
+ auto parent=source(u->parent);if(!parent||obs_source_removed(parent.get()))return;
+ auto f=findAttachedFilter(parent.get(),u->filter);
+ if(u->operation=="present"){
+  if(f)return;
+  auto v=u->value.toObject();auto snapshot=v["source"].toObject();
+  Source existing(obs_get_source_by_uuid(u->filter.toUtf8().constData()),obs_source_release);
+  Source collision(obs_source_get_filter_by_name(parent.get(),snapshot["name"].toString().toUtf8().constData()),obs_source_release);
+  if(existing||collision)return;
+  const int index=v["index"].toInt();
+  if(index>filterCount(parent.get()))return;
+  auto bytes=QJsonDocument(snapshot).toJson(QJsonDocument::Compact);
+  std::unique_ptr<obs_data_t,decltype(&obs_data_release)> settings(obs_data_create_from_json(bytes.constData()),obs_data_release);
+  if(!settings)return;
+  Source restored(obs_load_source(settings.get()),obs_source_release);
+  if(!restored||uuid(restored.get())!=u->filter||obs_source_get_type(restored.get())!=OBS_SOURCE_TYPE_FILTER)return;
+  obs_source_filter_add(parent.get(),restored.get());
+  if(obs_source_filter_get_index(parent.get(),restored.get())<0)return;
+  obs_source_filter_set_index(parent.get(),restored.get(),size_t(index));
+ }else{
+  if(!f)return;
+  if(u->operation=="absent")obs_source_filter_remove(parent.get(),f.get());
+  else if(u->operation=="enabled")obs_source_set_enabled(f.get(),u->value.toBool());
+  else if(u->operation=="index"){
+   const int index=u->value.toInt();if(index>=filterCount(parent.get()))return;
+   obs_source_filter_set_index(parent.get(),f.get(),size_t(index));
+  }else if(u->operation=="name"){
+   auto name=u->value.toString().toUtf8();
+   Source collision(obs_source_get_filter_by_name(parent.get(),name.constData()),obs_source_release);
+   if(collision&&collision.get()!=f.get())return;
+   obs_source_set_name(f.get(),name.constData());
+  }
+ }
+ obs_frontend_save();
+}
+void registerFilterUndo(const QString&label,const FilterUndo&before,const FilterUndo&after){
+ auto undo=before.encode(),redo=after.encode();
+ if(undo==redo||!FilterUndo::decode(undo)||!FilterUndo::decode(redo))return;
+ auto title=("Unscene: "+label).toUtf8();
+ obs_frontend_add_undo_redo_action(title.constData(),restoreFilterUndo,restoreFilterUndo,undo.constData(),redo.constData(),false);
+}
 class Dock : public QWidget {
  QListView *nativeList; QVBoxLayout *rows; QVBoxLayout *dockLayout; QToolBar*bar; QScrollArea *scroll; QWidget *body; QTimer timer;
  Inspector*inspector; QSplitter*splitter;
@@ -150,11 +206,6 @@ class Dock : public QWidget {
    auto flags=obs_source_get_output_flags(f);
    v.append({uuid(f),QString::fromUtf8(obs_source_get_name(f)),QString::fromUtf8(obs_source_get_display_name(obs_source_get_id(f))),obs_source_enabled(f),bool(flags&OBS_SOURCE_ASYNC)});
   },&out);return out;
- }
- Source resolveFilter(obs_source_t*parent,const QString&id){
-  struct C{QString id;obs_source_t*found=nullptr;}c{id};
-  obs_source_enum_filters(parent,[](obs_source_t*,obs_source_t*f,void*p){auto&c=*static_cast<C*>(p);if(uuid(f)==c.id)c.found=obs_source_get_ref(f);},&c);
-  return Source(c.found,obs_source_release);
  }
  void refreshInspectorExtras(bool usage=false){
   if(!inspected)return;
@@ -186,6 +237,9 @@ class Dock : public QWidget {
   auto parent=inspectorSource(n,expected);if(!parent)return;
   QScopedValueRollback<bool> guard(editingAppearance,true);
   if(action=="settings"){obs_frontend_open_source_filters(parent.get());return;}
+  auto record=[&](const QString&label,const QString&fid,const QString&op,QJsonValue before,QJsonValue after){
+   registerFilterUndo(label,{expected,n.uid,fid,op,before},{expected,n.uid,fid,op,after});
+  };
   if(action=="add"){
    QVector<QPair<QString,QString>> types;const char*type=nullptr;
    auto flags=obs_source_get_output_flags(parent.get());
@@ -206,21 +260,34 @@ class Dock : public QWidget {
    Source f(obs_source_create(typeId.toUtf8().constData(),name.toUtf8().constData(),nullptr,nullptr),obs_source_release);
    if(!f){QMessageBox::warning(this,"Unscene","Could not create the filter.");return;}
    obs_source_filter_add(parent.get(),f.get());
+   registerFilterUndo("add filter "+name,{expected,n.uid,uuid(f.get()),"absent",QJsonValue::Null},{expected,n.uid,uuid(f.get()),"present",savedFilter(parent.get(),f.get())});
   }else{
-   auto f=resolveFilter(parent.get(),id);if(!f)return;
-   if(action=="enable"||action=="disable")obs_source_set_enabled(f.get(),action=="enable");
-   else if(action=="up"||action=="down")obs_source_filter_set_order(parent.get(),f.get(),action=="up"?OBS_ORDER_MOVE_UP:OBS_ORDER_MOVE_DOWN);
+   auto f=findAttachedFilter(parent.get(),id);if(!f)return;
+   if(action=="enable"||action=="disable"){
+    bool before=obs_source_enabled(f.get());obs_source_set_enabled(f.get(),action=="enable");
+    record("toggle filter",id,"enabled",before,obs_source_enabled(f.get()));
+   }else if(action=="up"||action=="down"){
+    int before=obs_source_filter_get_index(parent.get(),f.get());
+    obs_source_filter_set_order(parent.get(),f.get(),action=="up"?OBS_ORDER_MOVE_UP:OBS_ORDER_MOVE_DOWN);
+    record("reorder filter",id,"index",before,obs_source_filter_get_index(parent.get(),f.get()));
+   }
    else if(action=="rename"){
     bool ok=false;auto name=QInputDialog::getText(this,"Rename filter","Name",QLineEdit::Normal,QString::fromUtf8(obs_source_get_name(f.get())),&ok).trimmed();
     if(!ok||name.isEmpty())return;
-    parent=inspectorSource(n,expected);if(!parent)return;f=resolveFilter(parent.get(),id);if(!f)return;
+    parent=inspectorSource(n,expected);if(!parent)return;f=findAttachedFilter(parent.get(),id);if(!f)return;
     Source other(obs_source_get_filter_by_name(parent.get(),name.toUtf8().constData()),obs_source_release);
     if(other&&other.get()!=f.get()){QMessageBox::warning(this,"Unscene","That filter name is already in use.");return;}
+    auto before=QString::fromUtf8(obs_source_get_name(f.get()));
     obs_source_set_name(f.get(),name.toUtf8().constData());
+    record("rename filter",id,"name",before,QString::fromUtf8(obs_source_get_name(f.get())));
    }else if(action=="remove"){
-    if(QMessageBox::question(this,"Remove filter","Remove this shared filter? This operation is not in OBS Undo.",QMessageBox::Yes|QMessageBox::Cancel,QMessageBox::Cancel)!=QMessageBox::Yes)return;
-    parent=inspectorSource(n,expected);if(!parent)return;f=resolveFilter(parent.get(),id);if(!f)return;
+    if(QMessageBox::question(this,"Remove filter","Remove this shared filter from every instance of the source?",QMessageBox::Yes|QMessageBox::Cancel,QMessageBox::Cancel)!=QMessageBox::Yes)return;
+    parent=inspectorSource(n,expected);if(!parent)return;f=findAttachedFilter(parent.get(),id);if(!f)return;
+    auto snapshot=savedFilter(parent.get(),f.get());
+    FilterUndo before{expected,n.uid,id,"present",snapshot};
+    if(!FilterUndo::decode(before.encode())){QMessageBox::warning(this,"Unscene","Could not save filter for undo; filter was not removed.");return;}
     obs_source_filter_remove(parent.get(),f.get());
+    if(!findAttachedFilter(parent.get(),id))registerFilterUndo("remove filter",before,{expected,n.uid,id,"absent",QJsonValue::Null});
    }else return;
   }
   thumbnails.remove(n.uid);attempted.remove(n.uid);changedScene(n.key);refreshInspectorExtras();
