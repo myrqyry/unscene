@@ -48,3 +48,6 @@ Added direct mouse drag from unlocked source rows with native theme insertion li
 
 ## 2026-11-25 source action placement
 User requested swapping Filters and Lock in source rows. Filters now occupies the hover action slot, Lock/Unlock the expanded secondary slot. Retains native filter dialog and item-specific lock behavior; locked icon no longer always visible on collapsed rows. No new motion or graphics operations. Full CTest suite passed; atomic install verified by binary comparison. Actual OBS click-through not repeated for this placement-only change. No push.
+
+## 2026-11-25 source hover order
+User requested Properties, Filters, Visibility left to right. Reordered existing action declarations only; hidden-source visibility icon remains persistent at right edge. Secondary controls unchanged. Full CTest suite passed and atomic install verified. Placement not separately runtime-tested.
