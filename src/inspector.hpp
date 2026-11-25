@@ -20,6 +20,8 @@
 #include <optional>
 #include <functional>
 #include <cmath>
+#include <QTabWidget>
+#include "filter-panel.hpp"
 
 struct TransformState {
  obs_transform_info info{};
@@ -56,6 +58,7 @@ public:
 };
 class Inspector:public QWidget{
  PresetStore store;
+ QTabWidget*tabs;FilterPanel*filterPanel;QListWidget*usage;
  QLabel *title,*notice;
  QWidget*form;
  QDoubleSpinBox *posX,*posY,*scaleX,*scaleY,*rot,*boundsX,*boundsY;
@@ -93,7 +96,8 @@ class Inspector:public QWidget{
  }
  static QWidget*pair(QWidget*a,QWidget*b){auto*w=new QWidget;auto*l=new QHBoxLayout(w);l->setContentsMargins(0,0,0,0);l->addWidget(a);l->addWidget(b);return w;}
 public:
- std::function<void()> onClose,onApply,onDiscard,onProperties,onFilters;
+ std::function<void()> onClose,onApply,onDiscard,onProperties,onFilters,onUsageRefresh;
+ std::function<void(QString,QString)> onFilterAction;
  explicit Inspector(const QString&path,QWidget*parent=nullptr):QWidget(parent),store(path){
   auto*l=new QVBoxLayout(this);
   auto*header=new QHBoxLayout;title=new QLabel("Inspector",this);title->setTextFormat(Qt::PlainText);title->setWordWrap(true);header->addWidget(title,1);
@@ -102,17 +106,18 @@ public:
   connect(close,&QPushButton::clicked,this,[this]{if(onClose)onClose();});
   auto*links=new QHBoxLayout;auto*properties=new QPushButton("Properties…",this);auto*filters=new QPushButton("Filters…",this);links->addWidget(properties);links->addWidget(filters);l->addLayout(links);
   connect(properties,&QPushButton::clicked,this,[this]{if(onProperties)onProperties();});connect(filters,&QPushButton::clicked,this,[this]{if(onFilters)onFilters();});
+  tabs=new QTabWidget(this);l->addWidget(tabs,1);auto*transformPage=new QWidget(tabs);auto*tl=new QVBoxLayout(transformPage);tl->setContentsMargins(0,0,0,0);tabs->addTab(transformPage,"Transform");
   auto*area=new QScrollArea(this);area->setWidgetResizable(true);area->setFrameShape(QFrame::NoFrame);form=new QWidget;auto*f=new QFormLayout(form);f->setContentsMargins(0,0,0,0);
   posX=number("positionX");posY=number("positionY");scaleX=number("scaleX");scaleY=number("scaleY");rot=number("rotation");
   boundsX=number("boundsX",0);boundsY=number("boundsY",0);left=crop();top=crop();right=crop();bottom=crop();align=alignment();boundsAlign=alignment();
   boundsType=new QComboBox(form);for(auto s:{"None","Stretch","Scale inner","Scale outer","Scale to width","Scale to height","Maximum size"})boundsType->addItem(s,boundsType->count());
   connect(boundsType,&QComboBox::currentIndexChanged,this,[this]{updateActions();});cropBounds=new QCheckBox("Crop to bounds",form);connect(cropBounds,&QCheckBox::toggled,this,[this]{updateActions();});
   f->addRow("Position X / Y",pair(posX,posY));f->addRow("Scale X / Y",pair(scaleX,scaleY));f->addRow("Rotation",rot);f->addRow("Alignment",align);f->addRow("Bounds",boundsType);f->addRow("Bounds W / H",pair(boundsX,boundsY));f->addRow("Bounds alignment",boundsAlign);f->addRow("",cropBounds);f->addRow("Crop L / T",pair(left,top));f->addRow("Crop R / B",pair(right,bottom));
-  area->setWidget(form);area->setMinimumHeight(120);l->addWidget(area,1);
+  area->setWidget(form);area->setMinimumHeight(120);tl->addWidget(area,1);
   auto*pr=new QHBoxLayout;presets=new QComboBox(this);presets->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);presets->setMinimumContentsLength(6);pr->addWidget(presets,1);
-  loadPreset=new QPushButton("Load",this);savePreset=new QPushButton("Save…",this);removePreset=new QPushButton("Delete",this);pr->addWidget(loadPreset);pr->addWidget(savePreset);pr->addWidget(removePreset);l->addLayout(pr);
-  notice=new QLabel(this);notice->setWordWrap(true);l->addWidget(notice);
-  auto*actions=new QHBoxLayout;discardButton=new QPushButton("Discard",this);applyButton=new QPushButton("Apply",this);actions->addStretch();actions->addWidget(discardButton);actions->addWidget(applyButton);l->addLayout(actions);
+  loadPreset=new QPushButton("Load",this);savePreset=new QPushButton("Save…",this);removePreset=new QPushButton("Delete",this);pr->addWidget(loadPreset);pr->addWidget(savePreset);pr->addWidget(removePreset);tl->addLayout(pr);
+  notice=new QLabel(this);notice->setWordWrap(true);tl->addWidget(notice);
+  auto*actions=new QHBoxLayout;discardButton=new QPushButton("Discard",this);applyButton=new QPushButton("Apply",this);actions->addStretch();actions->addWidget(discardButton);actions->addWidget(applyButton);tl->addLayout(actions);
   connect(applyButton,&QPushButton::clicked,this,[this]{if(onApply)onApply();});
   connect(discardButton,&QPushButton::clicked,this,[this]{if(onDiscard)onDiscard();});
   connect(loadPreset,&QPushButton::clicked,this,[this]{if(auto t=store.load(presets->currentText()))controls(*t);});
@@ -122,8 +127,21 @@ public:
    if(!store.save(name,draft()))QMessageBox::warning(this,"Unscene","Could not save preset.");reloadPresets(name);
   });
   connect(removePreset,&QPushButton::clicked,this,[this]{auto name=presets->currentText();if(!name.isEmpty()&&QMessageBox::question(this,"Delete preset","Delete this preset?",QMessageBox::Yes|QMessageBox::Cancel,QMessageBox::Cancel)==QMessageBox::Yes){store.remove(name);reloadPresets();}});
+  filterPanel=new FilterPanel(tabs);tabs->addTab(filterPanel,"Filters");
+  filterPanel->onAction=[this](QString a,QString id){if(onFilterAction)onFilterAction(a,id);};
+  auto*usagePage=new QWidget(tabs);auto*ul=new QVBoxLayout(usagePage);ul->setContentsMargins(0,0,0,0);
+  auto*hint=new QLabel("Direct instances in scenes and groups (including collapsed branches).",usagePage);hint->setWordWrap(true);ul->addWidget(hint);
+  usage=new QListWidget(usagePage);ul->addWidget(usage,1);
+  auto*refresh=new QPushButton("Refresh usage",usagePage);ul->addWidget(refresh);tabs->addTab(usagePage,"Usage");
+  connect(refresh,&QPushButton::clicked,this,[this]{if(onUsageRefresh)onUsageRefresh();});
+  connect(tabs,&QTabWidget::currentChanged,this,[this](int){if(onUsageRefresh)onUsageRefresh();});
   reloadPresets();
  }
+ void setVisual(bool visual){tabs->setTabEnabled(0,visual);if(!visual&&tabs->currentIndex()==0)tabs->setCurrentIndex(1);}
+ bool filtersVisible()const{return tabs->currentIndex()==1;}
+ bool usageVisible()const{return tabs->currentIndex()==2;}
+ void setFilters(const QVector<FilterEntry>&entries){filterPanel->setEntries(entries);}
+ void setUsage(const QStringList&lines){usage->clear();usage->addItems(lines);}
  bool pinned()const{return pin->isChecked();}
  void unpin(){pin->setChecked(false);}
  TransformState original()const{return base;}

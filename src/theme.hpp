@@ -16,6 +16,7 @@
 inline QPixmap glyphPixmap(const QString &id,const QColor&color,int size,qreal dpr=1){
  static const QHash<QString,QString> paths={
  {"inspector","<rect x='3' y='4' width='18' height='16' rx='2'/><path d='M3 11h18M8 15h8M8 7h4'/>"},
+ {"minus","<path d='M5 12h14'/>"},
  {"plus","<path d='M12 5v14M5 12h14'/>"},
  {"more","<circle cx='12' cy='5' r='1'/><circle cx='12' cy='12' r='1'/><circle cx='12' cy='19' r='1'/>"},
  {"eye","<path d='M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z'/><circle cx='12' cy='12' r='3'/>"},

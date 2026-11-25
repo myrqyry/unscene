@@ -137,6 +137,94 @@ class Dock : public QWidget {
  Inspector*inspector; QSplitter*splitter;
  std::optional<Node> inspected;
  QString inspectorCollection;
+ Source inspectorSource(const Node&n,const QString&expected){
+  if(!sameCollection(expected))return Source(nullptr,obs_source_release);
+  Source result(nullptr,obs_source_release);
+  withItem(n.parent,n.id,n.uid,[&](auto*i){result.reset(obs_source_get_ref(obs_sceneitem_get_source(i)));});
+  return result;
+ }
+ QVector<FilterEntry> filterEntries(obs_source_t*parent){
+  QVector<FilterEntry> out;
+  obs_source_enum_filters(parent,[](obs_source_t*,obs_source_t*f,void*opaque){
+   auto&v=*static_cast<QVector<FilterEntry>*>(opaque);
+   auto flags=obs_source_get_output_flags(f);
+   v.append({uuid(f),QString::fromUtf8(obs_source_get_name(f)),QString::fromUtf8(obs_source_get_display_name(obs_source_get_id(f))),obs_source_enabled(f),bool(flags&OBS_SOURCE_ASYNC)});
+  },&out);return out;
+ }
+ Source resolveFilter(obs_source_t*parent,const QString&id){
+  struct C{QString id;obs_source_t*found=nullptr;}c{id};
+  obs_source_enum_filters(parent,[](obs_source_t*,obs_source_t*f,void*p){auto&c=*static_cast<C*>(p);if(uuid(f)==c.id)c.found=obs_source_get_ref(f);},&c);
+  return Source(c.found,obs_source_release);
+ }
+ void refreshInspectorExtras(bool usage=false){
+  if(!inspected)return;
+  auto parent=inspectorSource(*inspected,inspectorCollection);if(!parent)return;
+  if(inspector->filtersVisible())inspector->setFilters(filterEntries(parent.get()));
+  if(!usage||!inspector->usageVisible())return;
+  QStringList lines;
+  obs_frontend_source_list scenes={};obs_frontend_get_scenes(&scenes);
+  for(size_t i=0;i<scenes.sources.num;++i){
+   auto*root=scenes.sources.array[i];collectUsage(obs_scene_from_source(root),QString::fromUtf8(obs_source_get_name(root)),inspected->uid,lines,0);
+  }
+  obs_frontend_source_list_free(&scenes);
+  if(lines.isEmpty())lines<<"No direct instances found";
+  inspector->setUsage(lines);
+ }
+ static void collectUsage(obs_scene_t*scene,const QString&path,const QString&uid,QStringList&lines,int depth){
+  if(!scene||depth>24)return;
+  struct C{QString path,uid;QStringList*lines;int depth;int count=0;}c{path,uid,&lines,depth};
+  obs_scene_enum_items(scene,[](obs_scene_t*,obs_sceneitem_t*i,void*p){
+   auto&c=*static_cast<C*>(p);auto*s=obs_sceneitem_get_source(i);if(!s)return true;
+   if(uuid(s)==c.uid)++c.count;
+   if(obs_sceneitem_is_group(i))collectUsage(obs_sceneitem_group_get_scene(i),c.path+" / "+QString::fromUtf8(obs_source_get_name(s)),c.uid,*c.lines,c.depth+1);
+   return true;
+  },&c);
+  if(c.count)lines<<QString("%1  (%2)").arg(path).arg(c.count);
+ }
+ void filterAction(const Node&n,const QString&expected,const QString&action,const QString&id){
+  if(!inspected||inspected->key!=n.key||!sameCollection(expected))return;
+  auto parent=inspectorSource(n,expected);if(!parent)return;
+  QScopedValueRollback<bool> guard(editingAppearance,true);
+  if(action=="settings"){obs_frontend_open_source_filters(parent.get());return;}
+  if(action=="add"){
+   QVector<QPair<QString,QString>> types;const char*type=nullptr;
+   auto flags=obs_source_get_output_flags(parent.get());
+   for(size_t i=0;obs_enum_filter_types(i,&type);++i)if(type&&filterCompatible(flags,obs_get_source_output_flags(type))){
+    auto name=QString::fromUtf8(obs_source_get_display_name(type));if(!name.isEmpty())types.append({name,QString::fromUtf8(type)});
+   }
+   std::sort(types.begin(),types.end(),[](auto&a,auto&b){return a.first.localeAwareCompare(b.first)<0;});
+   QStringList labels;for(auto&t:types)labels<<t.first+" — "+t.second;
+   if(labels.isEmpty()){QMessageBox::information(this,"Unscene","No compatible filters.");return;}
+   bool ok=false;auto choice=QInputDialog::getItem(this,"Add filter","Filter type",labels,0,false,&ok);if(!ok)return;
+   auto index=labels.indexOf(choice);if(index<0)return;auto typeId=types[index].second;auto name=types[index].first;
+   for(int i=2;;++i){Source other(obs_source_get_filter_by_name(parent.get(),name.toUtf8().constData()),obs_source_release);if(!other)break;name=types[index].first+" "+QString::number(i);}
+   name=QInputDialog::getText(this,"Add filter","Name",QLineEdit::Normal,name,&ok).trimmed();
+   if(!ok||name.isEmpty())return;
+   parent=inspectorSource(n,expected);if(!parent)return;
+   Source other(obs_source_get_filter_by_name(parent.get(),name.toUtf8().constData()),obs_source_release);
+   if(other){QMessageBox::warning(this,"Unscene","That filter name is already in use.");return;}
+   Source f(obs_source_create(typeId.toUtf8().constData(),name.toUtf8().constData(),nullptr,nullptr),obs_source_release);
+   if(!f){QMessageBox::warning(this,"Unscene","Could not create the filter.");return;}
+   obs_source_filter_add(parent.get(),f.get());
+  }else{
+   auto f=resolveFilter(parent.get(),id);if(!f)return;
+   if(action=="enable"||action=="disable")obs_source_set_enabled(f.get(),action=="enable");
+   else if(action=="up"||action=="down")obs_source_filter_set_order(parent.get(),f.get(),action=="up"?OBS_ORDER_MOVE_UP:OBS_ORDER_MOVE_DOWN);
+   else if(action=="rename"){
+    bool ok=false;auto name=QInputDialog::getText(this,"Rename filter","Name",QLineEdit::Normal,QString::fromUtf8(obs_source_get_name(f.get())),&ok).trimmed();
+    if(!ok||name.isEmpty())return;
+    parent=inspectorSource(n,expected);if(!parent)return;f=resolveFilter(parent.get(),id);if(!f)return;
+    Source other(obs_source_get_filter_by_name(parent.get(),name.toUtf8().constData()),obs_source_release);
+    if(other&&other.get()!=f.get()){QMessageBox::warning(this,"Unscene","That filter name is already in use.");return;}
+    obs_source_set_name(f.get(),name.toUtf8().constData());
+   }else if(action=="remove"){
+    if(QMessageBox::question(this,"Remove filter","Remove this shared filter? This operation is not in OBS Undo.",QMessageBox::Yes|QMessageBox::Cancel,QMessageBox::Cancel)!=QMessageBox::Yes)return;
+    parent=inspectorSource(n,expected);if(!parent)return;f=resolveFilter(parent.get(),id);if(!f)return;
+    obs_source_filter_remove(parent.get(),f.get());
+   }else return;
+  }
+  thumbnails.remove(n.uid);attempted.remove(n.uid);changedScene(n.key);refreshInspectorExtras();
+ }
  void closeInspector(){inspected.reset();inspector->invalidate();inspector->hide();}
  bool canDiscardDraft(){
   return !inspector->dirty()||QMessageBox::question(this,"Unscene","Discard unapplied inspector changes?",QMessageBox::Discard|QMessageBox::Cancel,QMessageBox::Cancel)==QMessageBox::Discard;
@@ -149,9 +237,10 @@ class Dock : public QWidget {
    auto*s=obs_sceneitem_get_source(i);
    inspector->load(QString::fromUtf8(obs_source_get_name(s)),root?QString::fromUtf8(obs_source_get_name(root.get())):QString(),TransformState::read(i),obs_sceneitem_locked(i));
   }))closeInspector();
+  else {inspector->setVisual(n.video);refreshInspectorExtras(true);}
  }
  void inspect(const Node&n,bool explicitOpen){
-  if(n.scene||!n.video||stopping||!sameCollection(collection))return;
+  if(n.scene||stopping||!sameCollection(collection))return;
   if(!explicitOpen&&(!inspected||inspector->pinned()||inspector->dirty()))return;
   if(inspected&&inspected->key==n.key){if(explicitOpen)inspector->show();return;}
   if(inspected&&inspector->dirty()&&!canDiscardDraft())return;
@@ -186,7 +275,7 @@ class Dock : public QWidget {
    auto now=TransformState::read(i);
    if(now.encode()!=inspector->original().encode())loadInspector();else inspector->setLocked(obs_sceneitem_locked(i));
   });
-  if(!found)closeInspector();
+  if(!found)closeInspector();else refreshInspectorExtras();
  }
  QSet<QString> opened; QString selected,collection; QVector<Node> previous; bool initialized=false, pending=false, stopping=false;
  QHash<QString,QPixmap> thumbnails;
@@ -515,7 +604,7 @@ class Dock : public QWidget {
   }else{
    auto*props=menu.addAction("Properties");connect(props,&QAction::triggered,this,[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_properties(s.get());});
    auto*filters=menu.addAction("Filters");connect(filters,&QAction::triggered,this,[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_filters(s.get());});
-   if(n.video){auto*a=menu.addAction("Open inspector");connect(a,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))QTimer::singleShot(0,this,[this,n,expected]{if(sameCollection(expected))inspect(n,true);});});}
+   {auto*a=menu.addAction("Open inspector");connect(a,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))QTimer::singleShot(0,this,[this,n,expected]{if(sameCollection(expected))inspect(n,true);});});}
    auto*transform=menu.addAction("Edit transform");transform->setEnabled(n.key.section('/',0,0)==editingSceneUid());connect(transform,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))itemAction(n,[](auto*i){obs_frontend_open_sceneitem_edit_transform(i);});});
    if(!n.group){
     menu.addSeparator();
@@ -650,7 +739,7 @@ class Dock : public QWidget {
     r->addHover(n.visible?"Hide source":"Show source",n.visible?"eye":"eye-off",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_visible(i,!obs_sceneitem_visible(i));});},!n.visible);
     r->addHover(n.locked?"Unlock source":"Lock source",n.locked?"lock":"unlock",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_locked(i,!obs_sceneitem_locked(i));});},n.locked);
     r->addHover("Properties","properties",[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_properties(s.get());});
-    if(n.video)r->addSecondary("Inspector","inspector",[this,n]{inspect(n,true);});
+    r->addSecondary("Inspector","inspector",[this,n]{inspect(n,true);});
     r->addSecondary("Filters","filters",[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_filters(s.get());});
     r->addSecondary("Move up","up",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_order(i,OBS_ORDER_MOVE_UP);});});
     r->addSecondary("Move down","down",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_order(i,OBS_ORDER_MOVE_DOWN);});});
@@ -700,6 +789,8 @@ public:
   scroll=new QScrollArea(this);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);body=new QWidget;rows=new QVBoxLayout(body);rows->setContentsMargins(0,0,0,0);rows->setSpacing(1);scroll->setWidget(body);
   splitter=new QSplitter(Qt::Vertical,this);splitter->setChildrenCollapsible(false);splitter->addWidget(scroll);
   inspector=new Inspector(configPath("transform-presets.ini"),splitter);splitter->addWidget(inspector);inspector->hide();l->addWidget(splitter,1);
+  inspector->onUsageRefresh=[this]{refreshInspectorExtras(true);};
+  inspector->onFilterAction=[this](QString action,QString id){if(inspected){auto n=*inspected;auto expected=inspectorCollection;QTimer::singleShot(0,this,[this,n,expected,action,id]{filterAction(n,expected,action,id);});}};
   inspector->onClose=[this]{if(canDiscardDraft())closeInspector();};
   inspector->onApply=[this]{applyInspector();};
   inspector->onDiscard=[this]{loadInspector();};
