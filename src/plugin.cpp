@@ -22,6 +22,7 @@
 #include "item-menu.hpp"
 #include "inspector.hpp"
 #include "filter-undo.hpp"
+#include "order.hpp"
 #include <QJsonObject>
 #include <QSplitter>
 #include <QGuiApplication>
@@ -187,6 +188,31 @@ void registerFilterUndo(const QString&label,const FilterUndo&before,const Filter
  if(undo==redo||!FilterUndo::decode(undo)||!FilterUndo::decode(redo))return;
  auto title=("Unscene: "+label).toUtf8();
  obs_frontend_add_undo_redo_action(title.constData(),restoreFilterUndo,restoreFilterUndo,undo.constData(),redo.constData(),false);
+}
+QString itemOrderKey(obs_sceneitem_t*i){return QString::number(obs_sceneitem_get_id(i))+":"+uuid(obs_sceneitem_get_source(i));}
+QString nodeOrderKey(const Node&n){return QString::number(n.id)+":"+n.uid;}
+obs_scene_t* ownerScene(obs_source_t*s){if(!s)return nullptr;auto*p=obs_scene_from_source(s);return p?p:obs_group_from_source(s);}
+QStringList currentOrder(obs_scene_t*scene){
+ QStringList out;if(scene)obs_scene_enum_items(scene,[](obs_scene_t*,obs_sceneitem_t*i,void*p){static_cast<QStringList*>(p)->prepend(itemOrderKey(i));return true;},&out);return out;
+}
+bool applyOrder(obs_scene_t*scene,const QStringList&expected,const QStringList&next){
+ if(!scene||!sameOrderMembers(expected,next)||expected==next)return false;
+ // Retain refs across enumeration and atomic reorder. OBS validates the membership under its own lock.
+ struct Items{QStringList order;QHash<QString,obs_sceneitem_t*> refs;}items;
+ obs_scene_enum_items(scene,[](obs_scene_t*,obs_sceneitem_t*i,void*p){
+  auto&c=*static_cast<Items*>(p);auto k=itemOrderKey(i);c.order.prepend(k);obs_sceneitem_addref(i);c.refs.insert(k,i);return true;
+ },&items);
+ bool changed=false;
+ if(items.order==expected){
+  QVector<obs_sceneitem_t*> order;for(auto it=next.crbegin();it!=next.crend();++it)order.append(items.refs.value(*it));
+  changed=obs_scene_reorder_items(scene,order.data(),size_t(order.size()));
+ }
+ for(auto*i:items.refs)obs_sceneitem_release(i);
+ return changed;
+}
+void restoreOrder(const char*data){
+ auto u=OrderUndo::decode(data);if(!u||u->collection!=currentCollection())return;
+ auto p=source(u->parent);if(p&&!obs_source_removed(p.get())&&applyOrder(ownerScene(p.get()),u->expected,u->next))obs_frontend_save();
 }
 class Dock : public QWidget {
  QListView *nativeList; QVBoxLayout *rows; QVBoxLayout *dockLayout; QToolBar*bar; QScrollArea *scroll; QWidget *body; QTimer timer;
@@ -361,6 +387,52 @@ class Dock : public QWidget {
  struct RowEntry{Node node;Row*row;Reveal*shell;};
  QHash<QString,RowEntry> rowEntries;
  QVector<QString> rowOrder;
+ QPointer<Row> dropMarker;
+ QString dragCollection,dragKey;
+ void clearDrag(){if(dropMarker)dropMarker->setDropIndicator(0);dropMarker=nullptr;dragKey.clear();dragCollection.clear();}
+ std::optional<QPair<Node,bool>> dropTarget(const Node&from,QPoint pos){
+  if(from.scene||from.locked||searching()||!sameCollection(collection)||!scroll->viewport()->rect().contains(scroll->viewport()->mapFromGlobal(pos)))return {};
+  for(auto&entry:rowEntries){
+   const auto&n=entry.node;if(n.scene||n.key==from.key||n.parent!=from.parent)continue;
+   auto*r=entry.row;if(!r->isVisible())continue;
+   auto local=r->mapFromGlobal(pos);
+   if(r->rect().contains(local))return QPair<Node,bool>{n,local.y()<r->height()/2};
+  }return {};
+ }
+ bool dragMove(const Node&from,QPoint pos){
+  if(dragKey!=from.key){clearDrag();dragKey=from.key;dragCollection=collection;}
+  if(dropMarker)dropMarker->setDropIndicator(0);dropMarker=nullptr;
+  auto target=dropTarget(from,pos);
+  if(target&&sameCollection(dragCollection)){dropMarker=rowEntries.value(target->first.key).row;dropMarker->setDropIndicator(target->second?-1:1);}
+  return bool(target);
+ }
+ void applySiblingOrder(const Node&n,const QString&expected,const QStringList&before,const QStringList&after){
+  if(!sameCollection(expected)||before==after)return;
+  auto p=source(n.parent);auto*scene=p?ownerScene(p.get()):nullptr;
+  auto*i=scene?obs_scene_find_sceneitem_by_id(scene,n.id):nullptr;
+  if(!i||uuid(obs_sceneitem_get_source(i))!=n.uid||obs_sceneitem_locked(i))return;
+  if(!applyOrder(scene,before,after))return;
+  auto undo=OrderUndo{expected,n.parent,after,before}.encode(),redo=OrderUndo{expected,n.parent,before,after}.encode();
+  auto title=("Unscene: reorder "+n.title).toUtf8();
+  obs_frontend_add_undo_redo_action(title.constData(),restoreOrder,restoreOrder,undo.constData(),redo.constData(),false);
+  changedScene(n.key);
+ }
+ void finishDrag(const Node&from,QPoint pos){
+  auto expected=dragCollection;auto target=dropTarget(from,pos);bool valid=dragKey==from.key&&sameCollection(expected);clearDrag();
+  if(!valid||!target)return;
+  auto p=source(from.parent);auto before=currentOrder(p?ownerScene(p.get()):nullptr);
+  auto after=moveRelative(before,nodeOrderKey(from),nodeOrderKey(target->first),target->second);
+  if(after)applySiblingOrder(from,expected,before,*after);
+ }
+ void moveItem(const Node&n,int movement){
+  if(n.scene||n.locked||!sameCollection(collection))return;
+  auto p=source(n.parent);auto before=currentOrder(p?ownerScene(p.get()):nullptr);auto after=before;
+  auto index=before.indexOf(nodeOrderKey(n));if(index<0)return;
+  int dest=int(index);
+  switch(movement){case OBS_ORDER_MOVE_UP:--dest;break;case OBS_ORDER_MOVE_DOWN:++dest;break;case OBS_ORDER_MOVE_TOP:dest=0;break;case OBS_ORDER_MOVE_BOTTOM:dest=after.size()-1;break;default:return;}
+  dest=qBound(0,dest,int(after.size())-1);if(dest==index)return;
+  after.move(index,dest);applySiblingOrder(n,collection,before,after);
+ }
  QVector<QPointer<Reveal>> retiring;
  QVector<GlyphButton*> toolbar;
  int motionDuration=navigation.motionDuration();
@@ -622,7 +694,7 @@ class Dock : public QWidget {
    itemToggle("Locked",obs_sceneitem_locked(i),[](auto*x){obs_sceneitem_set_locked(x,!obs_sceneitem_locked(x));});
    auto*order=menu.addMenu("Order");
    for(auto c:QVector<MenuChoice>{{"Move up",OBS_ORDER_MOVE_UP},{"Move down",OBS_ORDER_MOVE_DOWN},{"Move to top",OBS_ORDER_MOVE_TOP},{"Move to bottom",OBS_ORDER_MOVE_BOTTOM}}){
-    auto*a=order->addAction(c.label);connect(a,&QAction::triggered,this,[mutate,c]{mutate([c](auto*x){obs_sceneitem_set_order(x,static_cast<obs_order_movement>(c.value));});});
+    auto*a=order->addAction(c.label);a->setEnabled(!obs_sceneitem_locked(i));connect(a,&QAction::triggered,this,[this,n,expected,c]{if(sameCollection(expected))moveItem(n,c.value);});
    }
    if(!(flags&OBS_SOURCE_VIDEO))return;
    choiceMenu(&menu,"Scale filtering",scaleChoices(),obs_sceneitem_get_scale_filter(i),[mutate](int v){mutate([v](auto*x){obs_sceneitem_set_scale_filter(x,static_cast<obs_scale_type>(v));});});
@@ -700,7 +772,7 @@ class Dock : public QWidget {
  void queueAppearance(const Node&n){QTimer::singleShot(0,this,[this,n]{editAppearance(n);});}
  static constexpr int maxDepth=24;
  void updateSnapshots(){
-  if(!isVisible()||layoutMoving()||!captureAllowed())return;
+  if(!isVisible()||!dragKey.isEmpty()||layoutMoving()||!captureAllowed())return;
   for(const auto&n:previous){
    auto label=labels.value(n.key);
    if(!snapshotKeys.contains(n.key)||artworkOverrides.contains(n.uid)||!n.video||!label||thumbnails.contains(n.uid)||!scroll->viewport()->rect().intersects(QRect(label->mapTo(scroll->viewport(),QPoint()),label->size())))continue;
@@ -742,6 +814,7 @@ class Dock : public QWidget {
   dirty=true;request();
  }
  void render(const QVector<Node>&nodes){
+  clearDrag();
   const int pos=scroll->verticalScrollBar()->value();
   labels.clear();keys.clear();artworkOverrides.clear();snapshotKeys.clear();
   finishRetiring();
@@ -798,6 +871,11 @@ class Dock : public QWidget {
    if(fresh){
    r->onAppearance=[this,n]{queueNativeContext(n);};
    r->onBody=[this,n]{toggle(n);};
+   if(!n.scene&&!n.locked){
+    r->onDragMove=[this,n](QPoint pos){return dragMove(n,pos);};
+    r->onDrop=[this,n](QPoint pos){finishDrag(n,pos);};
+    r->onDragCancel=[this]{clearDrag();};
+   }
    if(n.scene){
     r->addHover(obs_frontend_preview_program_mode_active()?"Select preview scene":"Activate scene","arrow-right",[this,n]{auto s=source(n.uid);if(!s||!obs_scene_from_source(s.get()))return;if(obs_frontend_preview_program_mode_active())obs_frontend_set_current_preview_scene(s.get());else obs_frontend_set_current_scene(s.get());request();});
     r->addHover("Add source","plus",[this,n]{QTimer::singleShot(0,this,[this,n]{addSource(n);});});
@@ -808,8 +886,8 @@ class Dock : public QWidget {
     r->addHover("Properties","properties",[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_properties(s.get());});
     r->addSecondary("Inspector","inspector",[this,n]{inspect(n,true);});
     r->addSecondary("Filters","filters",[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_filters(s.get());});
-    r->addSecondary("Move up","up",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_order(i,OBS_ORDER_MOVE_UP);});});
-    r->addSecondary("Move down","down",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_order(i,OBS_ORDER_MOVE_DOWN);});});
+    r->addSecondary("Move up","up",[this,n]{moveItem(n,OBS_ORDER_MOVE_UP);});
+    r->addSecondary("Move down","down",[this,n]{moveItem(n,OBS_ORDER_MOVE_DOWN);});
     r->addSecondary("More actions","more",[this,n]{queueContext(n);});
     if(n.audio)r->addSecondary("Toggle mute",n.muted?"mute":"volume",[n]{auto s=source(n.uid);if(s)obs_source_set_muted(s.get(),!obs_source_muted(s.get()));});
    }

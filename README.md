@@ -37,6 +37,11 @@ Expand a source and click the Inspector button (or More actions → Open inspect
 
 Inspired by [Source Inspector Dock](https://github.com/prgmitchell/source-inspector-dock); this first inspector implementation is independently authored using public OBS APIs.
 
+## Source ordering
+Drag an unlocked source row by its name or artwork above/below another source in the same scene or group. A theme-colored insertion line shows the drop position. Search disables drag reordering so hidden siblings are not ambiguous. Cross-scene and cross-group drops are rejected; use the existing copy/reference actions for transfers. The expanded-row arrow buttons and Unscene Order menu also use the same native undoable reorder path. Undo/redo validates the exact sibling sequence and collection before restoring the previous order, without switching the live scene.
+
+![Reordering sources](docs/screenshots/source-reordering.png)
+
 ## Source management
 Hover a scene and click the plus button (or right-click it) to open the searchable source picker. Existing sources are added as shared references; New source lists available input types and prompts for a unique name. New configurable sources open their native properties.
 
@@ -75,4 +80,4 @@ First prototype screenshot (before the rename):
 
 ## Current limitations
 
-Not yet a full native dock replacement. Drag/drop, nested scene traversal, scene/group creation and deletion, general snapshot invalidation, and CI are still pending. Direct add/paste/remove/rename actions do not yet integrate with OBS Undo. The add picker and paste target root scenes; copying groups or nested scenes is not supported. Expansion preferences are keyed by collection name; renaming a collection does not currently migrate them. Group traversal and Studio Mode activation are implemented but have not been runtime-validated. GPU readback is synchronous and not yet profiled. Inactive sources without cached snapshots remain placeholders.
+Not yet a full native dock replacement. Cross-scene drag/drop, nested scene traversal, scene/group creation and deletion, general snapshot invalidation, and CI are still pending. Direct add/paste/remove/rename actions do not yet integrate with OBS Undo. The add picker and paste target root scenes; copying groups or nested scenes is not supported. Expansion preferences are keyed by collection name; renaming a collection does not currently migrate them. Group traversal and Studio Mode activation are implemented but have not been runtime-validated. GPU readback is synchronous and not yet profiled. Inactive sources without cached snapshots remain placeholders.

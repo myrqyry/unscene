@@ -13,6 +13,7 @@
 #include <QListView>
 #include <QStyleOptionViewItem>
 #include <QPointer>
+#include <QApplication>
 #include <functional>
 #include "theme.hpp"
 #include "motion.hpp"
@@ -41,6 +42,10 @@ public:
  QWidget *secondary;
  QVector<QToolButton*> hoverButtons, secondaryButtons;
  std::function<void()> onBody,onAppearance;
+ std::function<bool(QPoint)> onDragMove;
+ std::function<void(QPoint)> onDrop;
+ std::function<void()> onDragCancel;
+ void setDropIndicator(int edge){if(dropEdge!=edge){dropEdge=edge;update();}}
  void setAccent(const QColor &color){accentColor=color;update();}
  QColor accent()const{return accentColor;}
  Row(const QString &title,bool scene,bool open,int depth,QWidget *parent=nullptr):QWidget(parent),isScene(scene),nestDepth(depth){
@@ -90,6 +95,7 @@ protected:
    auto tint=accentColor;tint.setAlpha(selected?22:38);p.setPen(Qt::NoPen);p.setBrush(tint);p.fillRect(surface,tint);
    p.setBrush(accentColor);p.fillRect(QRect(0,0,qMax(2,themeSpacing(this,Qt::Horizontal)/2),height()),accentColor);
   }
+  if(dropEdge){QPen pen(palette().color(QPalette::Highlight));pen.setWidth(2);p.setPen(pen);int y=dropEdge<0?1:height()-2;p.drawLine(outerLeft(),y,width()-2,y);}
   if(opened&&!isScene){auto divider=inkColor();divider.setAlpha(32);p.setPen(divider);const int y=secondaryReveal->geometry().top()-1;p.drawLine(outerLeft(),y,width()-5,y);}
  }
  void contextMenuEvent(QContextMenuEvent*e)override{if(onAppearance){onAppearance();e->accept();}else QWidget::contextMenuEvent(e);}
@@ -98,10 +104,27 @@ protected:
  void changeEvent(QEvent*e)override{QWidget::changeEvent(e);if(ready&&(e->type()==QEvent::PaletteChange||e->type()==QEvent::StyleChange||e->type()==QEvent::FontChange)){applyGeometry();applyInk();}}
  bool eventFilter(QObject *o,QEvent *e)override{
   if(e->type()==QEvent::ContextMenu&&onAppearance){onAppearance();return true;}
-  if(e->type()==QEvent::MouseButtonRelease&&static_cast<QMouseEvent*>(e)->button()==Qt::LeftButton){if(onBody)onBody();return true;}
+  if(e->type()==QEvent::MouseButtonPress){
+   auto*m=static_cast<QMouseEvent*>(e);if(m->button()==Qt::LeftButton){pressed=true;dragging=false;pressPoint=m->globalPosition().toPoint();return true;}
+  }
+  if(e->type()==QEvent::MouseMove&&pressed){
+   auto*m=static_cast<QMouseEvent*>(e);auto pos=m->globalPosition().toPoint();
+   if(m->buttons()&Qt::LeftButton){
+    if(dragging||(onDragMove&&(pos-pressPoint).manhattanLength()>=QApplication::startDragDistance())){
+     dragging=true;if(onDragMove)onDragMove(pos);return true;
+    }
+   }
+  }
+  if(e->type()==QEvent::MouseButtonRelease&&static_cast<QMouseEvent*>(e)->button()==Qt::LeftButton){
+   auto*m=static_cast<QMouseEvent*>(e);bool wasDragging=dragging;pressed=dragging=false;
+   if(wasDragging){if(onDrop)onDrop(m->globalPosition().toPoint());}
+   else if(onBody)onBody();return true;
+  }
+  if(e->type()==QEvent::UngrabMouse&&pressed){pressed=dragging=false;if(onDragCancel)onDragCancel();}
   return QWidget::eventFilter(o,e);
  }
 private:
+ int dropEdge=0;bool pressed=false,dragging=false;QPoint pressPoint;
  bool isScene,opened=false,selected=false;int nestDepth=0;bool ready=false;QWidget*top=nullptr;QColor accentColor; int duration=0;Reveal*secondaryReveal;
  QVariantAnimation rowHover;qreal hoverAmount=0;
  void animateHover(qreal target){rowHover.stop();if(!duration){hoverAmount=target;update();return;}rowHover.setDuration(duration);rowHover.setStartValue(hoverAmount);rowHover.setEndValue(target);rowHover.start();}
