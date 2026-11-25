@@ -26,6 +26,13 @@ Dock settings → Snapshot capture defaults to Cached artwork only (no GPU captu
 ## Motion
 Unscene uses short, interruptible Qt transitions for scene/group expansion, source secondary controls, search results, hover buttons, disclosure chevrons and snapshot refresh feedback. Unchanged rows are retained instead of recreated. Dock settings → Animations offers Off, Fast (90 ms) and Smooth (150 ms, default), persisted independently of the scene collection. Large structural changes skip row animation; snapshot capture waits until layout transitions settle. Motion is limited to Unscene's own widgets, not native OBS menus or dialogs.
 
+## Inspector
+Expand a visual source and click the Inspector button (or More actions → Open inspector). The resizable bottom panel edits the exact scene item, including items in inactive scenes. Pin retains the target while navigating; otherwise it follows clicked visual sources when there is no unapplied draft. Apply commits position, scale, rotation, alignment, bounds and crop in one OBS undoable action; Discard reloads current values. Locked items cannot be edited. Concurrent changes are detected on Apply rather than overwritten. Transform presets persist across restarts; load into the draft, then Apply. Save can replace an existing preset; Delete removes it. Numeric presets are absolute, not normalized to source dimensions. Properties and Filters buttons currently open the native dialogs rather than embedding editors.
+
+![Transform inspector](docs/screenshots/transform-inspector.png)
+
+Inspired by [Source Inspector Dock](https://github.com/prgmitchell/source-inspector-dock); this first inspector implementation is independently authored using public OBS APIs.
+
 ## Source management
 Hover a scene and click the plus button (or right-click it) to open the searchable source picker. Existing sources are added as shared references; New source lists available input types and prompts for a unique name. New configurable sources open their native properties.
 

@@ -20,6 +20,9 @@
 #include "item-copy.hpp"
 #include "native-menu.hpp"
 #include "item-menu.hpp"
+#include "inspector.hpp"
+#include <QJsonObject>
+#include <QSplitter>
 #include <QGuiApplication>
 #include <QScreen>
 #include <QListWidget>
@@ -110,8 +113,81 @@ QString configPath(const char* file){
  const auto path=QString::fromUtf8(raw?raw:"");bfree(raw);
  return path;
 }
+QString currentCollection(){
+ char*raw=obs_frontend_get_current_scene_collection();auto result=QString::fromUtf8(raw?raw:"");bfree(raw);return result;
+}
+template<class F> bool withItem(const QString&parent,int64_t id,const QString&uid,F fn){
+ auto p=source(parent);if(!p||obs_source_removed(p.get()))return false;
+ auto*scene=obs_scene_from_source(p.get());if(!scene)scene=obs_group_from_source(p.get());if(!scene)return false;
+ auto*i=obs_scene_find_sceneitem_by_id(scene,id);if(!i||uuid(obs_sceneitem_get_source(i))!=uid)return false;
+ obs_sceneitem_addref(i);fn(i);obs_sceneitem_release(i);return true;
+}
+QByteArray transformUndoData(const Node&n,const QString&collection,const TransformState&t){
+ return QJsonDocument(QJsonObject{{"collection",collection},{"parent",n.parent},{"id",QString::number(n.id)},{"source",n.uid},{"transform",QString::fromUtf8(t.encode())}}).toJson(QJsonDocument::Compact);
+}
+void restoreInspectorTransform(const char*data){
+ auto obj=QJsonDocument::fromJson(data).object();
+ if(obj.value("collection").toString()!=currentCollection())return;
+ bool ok=false;auto id=obj.value("id").toString().toLongLong(&ok);
+ auto t=TransformState::decode(obj.value("transform").toString().toUtf8());if(!ok||!t)return;
+ if(withItem(obj.value("parent").toString(),id,obj.value("source").toString(),[&](auto*i){t->apply(i);}))obs_frontend_save();
+}
 class Dock : public QWidget {
  QListView *nativeList; QVBoxLayout *rows; QVBoxLayout *dockLayout; QToolBar*bar; QScrollArea *scroll; QWidget *body; QTimer timer;
+ Inspector*inspector; QSplitter*splitter;
+ std::optional<Node> inspected;
+ QString inspectorCollection;
+ void closeInspector(){inspected.reset();inspector->invalidate();inspector->hide();}
+ bool canDiscardDraft(){
+  return !inspector->dirty()||QMessageBox::question(this,"Unscene","Discard unapplied inspector changes?",QMessageBox::Discard|QMessageBox::Cancel,QMessageBox::Cancel)==QMessageBox::Discard;
+ }
+ void loadInspector(){
+  if(!inspected||!sameCollection(inspectorCollection)){closeInspector();return;}
+  auto n=*inspected;
+  auto root=source(n.key.section('/',0,0));
+  if(!withItem(n.parent,n.id,n.uid,[&](auto*i){
+   auto*s=obs_sceneitem_get_source(i);
+   inspector->load(QString::fromUtf8(obs_source_get_name(s)),root?QString::fromUtf8(obs_source_get_name(root.get())):QString(),TransformState::read(i),obs_sceneitem_locked(i));
+  }))closeInspector();
+ }
+ void inspect(const Node&n,bool explicitOpen){
+  if(n.scene||!n.video||stopping||!sameCollection(collection))return;
+  if(!explicitOpen&&(!inspected||inspector->pinned()||inspector->dirty()))return;
+  if(inspected&&inspected->key==n.key){if(explicitOpen)inspector->show();return;}
+  if(inspected&&inspector->dirty()&&!canDiscardDraft())return;
+  inspected=n;inspectorCollection=collection;loadInspector();
+  if(inspected){inspector->show();splitter->setSizes({qMax(150,height()/2),qMax(260,height()/2)});}
+ }
+ void applyInspector(){
+  if(!inspected||!sameCollection(inspectorCollection))return;
+  auto n=*inspected;auto next=inspector->draft();
+  if(!TransformState::decode(next.encode()))return;
+  bool conflict=false;
+  bool found=withItem(n.parent,n.id,n.uid,[&](auto*i){
+   auto old=TransformState::read(i);
+   if(obs_sceneitem_locked(i)||old.encode()!=inspector->original().encode()){conflict=true;return;}
+   if(old.encode()==next.encode())return;
+   next.apply(i);auto actual=TransformState::read(i);
+   auto undo=transformUndoData(n,inspectorCollection,old),redo=transformUndoData(n,inspectorCollection,actual);
+   auto name=("Unscene: transform "+n.title).toUtf8();
+   if(old.encode()!=actual.encode())obs_frontend_add_undo_redo_action(name.constData(),restoreInspectorTransform,restoreInspectorTransform,undo.constData(),redo.constData(),false);
+   changedScene(n.key);
+  });
+  if(!found){closeInspector();return;}
+  if(conflict){QMessageBox::warning(this,"Unscene","The item was locked or its transform changed elsewhere. Discard the draft to reload current values.");return;}
+  loadInspector();
+ }
+ void refreshInspector(){
+  if(!inspected)return;
+  if(!sameCollection(inspectorCollection)){closeInspector();return;}
+  auto n=*inspected;
+  bool found=withItem(n.parent,n.id,n.uid,[&](auto*i){
+   if(inspector->dirty()){inspector->setLocked(obs_sceneitem_locked(i));return;}
+   auto now=TransformState::read(i);
+   if(now.encode()!=inspector->original().encode())loadInspector();else inspector->setLocked(obs_sceneitem_locked(i));
+  });
+  if(!found)closeInspector();
+ }
  QSet<QString> opened; QString selected,collection; QVector<Node> previous; bool initialized=false, pending=false, stopping=false;
  QHash<QString,QPixmap> thumbnails;
  QHash<QString,qint64> attempted;
@@ -439,6 +515,7 @@ class Dock : public QWidget {
   }else{
    auto*props=menu.addAction("Properties");connect(props,&QAction::triggered,this,[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_properties(s.get());});
    auto*filters=menu.addAction("Filters");connect(filters,&QAction::triggered,this,[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_filters(s.get());});
+   if(n.video){auto*a=menu.addAction("Open inspector");connect(a,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))QTimer::singleShot(0,this,[this,n,expected]{if(sameCollection(expected))inspect(n,true);});});}
    auto*transform=menu.addAction("Edit transform");transform->setEnabled(n.key.section('/',0,0)==editingSceneUid());connect(transform,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))itemAction(n,[](auto*i){obs_frontend_open_sceneitem_edit_transform(i);});});
    if(!n.group){
     menu.addSeparator();
@@ -505,7 +582,7 @@ class Dock : public QWidget {
  void toggle(const Node &n){
   animateStructure=true;
   if((n.scene||n.group)&&!searching()){if(opened.contains(n.key))opened.remove(n.key);else opened.insert(n.key);saveOpened();}
-  if(!n.scene)selected=selected==n.key?QString():n.key;
+  if(!n.scene){selected=selected==n.key?QString():n.key;if(!selected.isEmpty())inspect(n,false);}
   dirty=true;request();
  }
  void render(const QVector<Node>&nodes){
@@ -573,6 +650,7 @@ class Dock : public QWidget {
     r->addHover(n.visible?"Hide source":"Show source",n.visible?"eye":"eye-off",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_visible(i,!obs_sceneitem_visible(i));});},!n.visible);
     r->addHover(n.locked?"Unlock source":"Lock source",n.locked?"lock":"unlock",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_locked(i,!obs_sceneitem_locked(i));});},n.locked);
     r->addHover("Properties","properties",[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_properties(s.get());});
+    if(n.video)r->addSecondary("Inspector","inspector",[this,n]{inspect(n,true);});
     r->addSecondary("Filters","filters",[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_filters(s.get());});
     r->addSecondary("Move up","up",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_order(i,OBS_ORDER_MOVE_UP);});});
     r->addSecondary("Move down","down",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_order(i,OBS_ORDER_MOVE_DOWN);});});
@@ -619,7 +697,15 @@ public:
   search=new QLineEdit(bar);search->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);search->setPlaceholderText("Find scenes or sources…");search->setClearButtonEnabled(true);search->setAccessibleName("Find scenes or sources");search->setMinimumWidth(50);
   bar->addWidget(search);bar->addWidget(refreshButton);bar->addWidget(collapse);bar->addWidget(expand);bar->addWidget(settingsButton);l->addWidget(bar);
   connect(search,&QLineEdit::textChanged,this,[this](const QString&t){query=t;animateStructure=true;collapse->setEnabled(!searching());expand->setEnabled(!searching());dirty=true;request();});
-  scroll=new QScrollArea(this);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);body=new QWidget;rows=new QVBoxLayout(body);rows->setContentsMargins(0,0,0,0);rows->setSpacing(1);scroll->setWidget(body);l->addWidget(scroll);themeGeometry();
+  scroll=new QScrollArea(this);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);body=new QWidget;rows=new QVBoxLayout(body);rows->setContentsMargins(0,0,0,0);rows->setSpacing(1);scroll->setWidget(body);
+  splitter=new QSplitter(Qt::Vertical,this);splitter->setChildrenCollapsible(false);splitter->addWidget(scroll);
+  inspector=new Inspector(configPath("transform-presets.ini"),splitter);splitter->addWidget(inspector);inspector->hide();l->addWidget(splitter,1);
+  inspector->onClose=[this]{if(canDiscardDraft())closeInspector();};
+  inspector->onApply=[this]{applyInspector();};
+  inspector->onDiscard=[this]{loadInspector();};
+  inspector->onProperties=[this]{if(inspected&&sameCollection(inspectorCollection)){auto s=source(inspected->uid);if(s)obs_frontend_open_source_properties(s.get());}};
+  inspector->onFilters=[this]{if(inspected&&sameCollection(inspectorCollection)){auto s=source(inspected->uid);if(s)obs_frontend_open_source_filters(s.get());}};
+  themeGeometry();
   connect(collapse,&QToolButton::clicked,this,[this]{animateStructure=true;opened.clear();selected.clear();saveOpened();dirty=true;request();});
   connect(expand,&QToolButton::clicked,this,[this]{animateStructure=true;opened.unite(sceneKeys);saveOpened();dirty=true;request();});
   connect(&timer,&QTimer::timeout,this,[this]{refresh();});clock.start();timer.start(400);
@@ -635,7 +721,7 @@ public:
  void refresh(){
   if(stopping||editingAppearance||!isVisible())return;
   char *raw=obs_frontend_get_current_scene_collection();QString now=QString::fromUtf8(raw?raw:"");bfree(raw);
-  if(collection!=now){resetRows=true;collection=now;copied.reset();thumbnails.clear();attempted.clear();opened.clear();selected.clear();initialized=false;dirty=true;}
+  if(collection!=now){closeInspector();resetRows=true;collection=now;copied.reset();thumbnails.clear();attempted.clear();opened.clear();selected.clear();initialized=false;dirty=true;}
   Source live(obs_frontend_get_current_scene(),obs_source_release);
   Source preview(obs_frontend_preview_program_mode_active()?obs_frontend_get_current_preview_scene():nullptr,obs_source_release);
   if(!initialized&&!now.isEmpty()){auto saved=navigation.opened(now);if(saved)opened=*saved;else if(live)opened.insert(uuid(live.get()));initialized=true;}
@@ -648,7 +734,7 @@ public:
   obs_frontend_source_list_free(&list);
   if(searching())nodes=filterHierarchy(nodes,query);
   if(dirty||nodes!=previous){previous=nodes;dirty=false;render(nodes);}
-  updateSnapshots();
+  refreshInspector();updateSnapshots();
  }
 };
 QPointer<Dock> dock;
