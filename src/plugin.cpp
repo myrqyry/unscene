@@ -17,6 +17,10 @@
 #include "navigation.hpp"
 #include "source-picker.hpp"
 #include "item-copy.hpp"
+#include "native-menu.hpp"
+#include <QListWidget>
+#include <QItemSelectionModel>
+#include <QMetaMethod>
 #include <QInputDialog>
 #include <QScopedValueRollback>
 #include <cstring>
@@ -244,10 +248,99 @@ class Dock : public QWidget {
   if(other&&other.get()!=s.get()){QMessageBox::warning(this,"Unscene","That source name is already in use.");return;}
   obs_source_set_name(s.get(),name.toUtf8().constData());obs_frontend_save();dirty=true;request();
  }
- void contextMenu(const Node&n,const QPoint&pos){
+ QString editingSceneUid()const{
+  Source editing(obs_frontend_preview_program_mode_active()?obs_frontend_get_current_preview_scene():obs_frontend_get_current_scene(),obs_source_release);
+  return uuid(editing.get());
+ }
+ static void nativeRows(obs_scene_t*scene,QVector<NativeRow>&out,int depth=0){
+  if(!scene||depth>24)return;
+  struct Ctx{QVector<NativeRow>*out;int depth;};
+  Ctx ctx{&out,depth};
+  obs_scene_enum_items(scene,[](obs_scene_t*parent,obs_sceneitem_t*i,void*opaque){
+   auto&ctx=*static_cast<Ctx*>(opaque);
+   auto*s=obs_sceneitem_get_source(i);if(!s||obs_source_removed(s))return true;
+   if(obs_sceneitem_is_group(i)){
+    auto*data=obs_sceneitem_get_private_settings(i);
+    bool collapsed=data&&obs_data_get_bool(data,"collapsed");if(data)obs_data_release(data);
+    if(!collapsed)nativeRows(obs_sceneitem_group_get_scene(i),*ctx.out,ctx.depth+1);
+   }
+   ctx.out->prepend({uuid(obs_scene_get_source(parent)),obs_sceneitem_get_id(i),uuid(s),QString::fromUtf8(obs_source_get_name(s))});
+   return true;
+  },&ctx);
+ }
+ bool nativeContext(const Node&n){
+  if(editingAppearance||stopping||!sameCollection(collection))return false;
+  const auto root=n.key.section('/',0,0);
+  auto*window=static_cast<QWidget*>(obs_frontend_get_main_window());
+  if(!window)return false;
+  auto*scenes=window->findChild<QListWidget*>("scenes");
+  if(!scenes||!scenes->currentItem())return false;
+  Source nativeCurrent(obs_get_source_by_name(scenes->currentItem()->text().toUtf8().constData()),obs_source_release);
+  if(!canUseNativeMenu(root,editingSceneUid(),uuid(nativeCurrent.get())))return false;
+  QScopedValueRollback<bool> guard(editingAppearance,true);
+  if(n.scene){
+   if(window->metaObject()->indexOfMethod("on_scenes_customContextMenuRequested(QPoint)")<0)return false;
+   auto*item=scenes->currentItem();
+   if(scenes->selectedItems().size()!=1||!item->isSelected())return false;
+   scenes->scrollToItem(item);
+   const auto pos=scenes->visualItemRect(item).center();
+   if(scenes->itemAt(pos)!=item)return false;
+   return QMetaObject::invokeMethod(window,"on_scenes_customContextMenuRequested",Qt::DirectConnection,Q_ARG(QPoint,pos));
+  }
+  auto*view=window->findChild<QListView*>("sources");
+  if(!view||!view->model()||!view->selectionModel()||window->metaObject()->indexOfMethod("on_sources_customContextMenuRequested(QPoint)")<0)return false;
+  auto s=source(root);auto*scene=s?obs_scene_from_source(s.get()):nullptr;
+  QVector<NativeRow> native;nativeRows(scene,native);
+  const int row=nativeRowIndex(native,view->model(),n.parent,n.id,n.uid);
+  if(row<0)return false;
+  auto idx=view->model()->index(row,0);
+  view->scrollTo(idx);
+  const auto pos=view->visualRect(idx).center();
+  if(view->indexAt(pos)!=idx)return false;
+  auto parent=source(n.parent);auto*owner=parent?obs_scene_from_source(parent.get()):nullptr;
+  if(!owner&&parent)owner=obs_group_from_source(parent.get());
+  auto*i=owner?obs_scene_find_sceneitem_by_id(owner,n.id):nullptr;
+  if(!i||uuid(obs_sceneitem_get_source(i))!=n.uid)return false;
+  view->selectionModel()->setCurrentIndex(idx,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
+  if(!obs_sceneitem_selected(i)||view->selectionModel()->selectedRows().size()!=1||view->currentIndex()!=idx)return false;
+  // OBS's native menu actions use the current selection. Never open them
+  // against an inactive scene or a model whose identity could not be proven.
+  return QMetaObject::invokeMethod(window,"on_sources_customContextMenuRequested",Qt::DirectConnection,Q_ARG(QPoint,pos));
+ }
+ void queueNativeContext(const Node&n){
+  const auto pos=QCursor::pos();const auto expected=collection;
+  QTimer::singleShot(0,this,[this,n,pos,expected]{
+   if(!sameCollection(expected))return;
+   if(!nativeContext(n))contextMenu(n,pos,true);
+   dirty=true;request();
+  });
+ }
+ void contextMenu(const Node&n,const QPoint&pos,bool nativeFallback=false){
   if(editingAppearance||stopping)return;
   auto expected=collection;
   QMenu menu(this);
+  if(nativeFallback){
+   const auto root=n.key.section('/',0,0);
+   const bool inactive=root!=editingSceneUid();
+   auto*notice=menu.addAction(inactive?"Native menu requires the editing scene":"Native menu unavailable for this row");
+   notice->setEnabled(false);
+   if(inactive){
+    auto*activate=menu.addAction(obs_frontend_preview_program_mode_active()?"Select preview scene and open OBS menu…":"Activate scene and open OBS menu…");
+    connect(activate,&QAction::triggered,this,[this,n,root,expected]{
+     QTimer::singleShot(0,this,[this,n,root,expected]{
+      if(!sameCollection(expected))return;
+      auto s=source(root);if(!s||!obs_scene_from_source(s.get()))return;
+      if(obs_frontend_preview_program_mode_active())obs_frontend_set_current_preview_scene(s.get());else obs_frontend_set_current_scene(s.get());
+      QTimer::singleShot(100,this,[this,n,expected]{
+       if(!sameCollection(expected))return;
+       if(!nativeContext(n))QMessageBox::information(this,"Unscene","OBS's native menu is unavailable for this row. Use More actions instead.");
+       dirty=true;request();
+      });
+     });
+    });
+   }
+   menu.addSeparator();
+  }
   if(n.scene){
    auto*add=menu.addAction("Add source…");connect(add,&QAction::triggered,this,[this,n]{QTimer::singleShot(0,this,[this,n]{addSource(n);});});
    auto*ref=menu.addAction("Paste (reference)");ref->setEnabled(canPaste(false));
@@ -343,7 +436,7 @@ class Dock : public QWidget {
    const auto art=appearancePixmap(appearance,artworkPalette(r),r->thumb->size());
    if(!art.isNull()){artworkOverrides.insert(n.uid);r->thumb->setPixmap(art);}
    r->setAccent(appearance.color);
-   r->onAppearance=[this,n]{queueContext(n);};
+   r->onAppearance=[this,n]{queueNativeContext(n);};
    r->onBody=[this,n]{toggle(n);};
    if(n.scene){
     r->addHover(obs_frontend_preview_program_mode_active()?"Select preview scene":"Activate scene","arrow-right",[this,n]{auto s=source(n.uid);if(!s||!obs_scene_from_source(s.get()))return;if(obs_frontend_preview_program_mode_active())obs_frontend_set_current_preview_scene(s.get());else obs_frontend_set_current_scene(s.get());request();});

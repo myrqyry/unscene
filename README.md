@@ -23,14 +23,21 @@ Search the scene collection by name, including sources inside collapsed scenes a
 ## Source management
 Hover a scene and click the plus button (or right-click it) to open the searchable source picker. Existing sources are added as shared references; New source lists available input types and prompts for a unique name. New configurable sources open their native properties.
 
-Right-click a source for properties, filters, transform editing, copy, rename, appearance, and removal. Copy a source in Unscene, then right-click a destination scene and choose Paste (reference) or Paste (duplicate). Pasting preserves the copied item's transform, crop, scale filter, blending, visibility, and lock state. A duplicate creates an independent source when the source type permits it. Unscene keeps a collection-scoped clipboard and also invokes native OBS copy; native-to-Unscene clipboard import is not supported. Adding or pasting into an inactive scene does not switch the live scene. Removal targets only the selected scene item, with confirmation.
+Use a source’s More actions (ellipsis) for properties, filters, transform editing, copy, rename, appearance, and removal. Copy a source through Unscene’s More actions, then use the destination scene’s More actions to choose Paste (reference) or Paste (duplicate). Pasting preserves the copied item's transform, crop, scale filter, blending, visibility, and lock state. A duplicate creates an independent source when the source type permits it. Unscene keeps a collection-scoped clipboard and also invokes native OBS copy; native-to-Unscene clipboard import is not supported. Adding or pasting into an inactive scene does not switch the live scene. Removal targets only the selected scene item, with confirmation.
 
 ![New source picker](docs/screenshots/source-picker.png)
 
 ![Shared and independent copies across scenes](docs/screenshots/cross-scene-copy.png)
 
+## Native OBS context menus
+Right-click a scene or source in the current editing scene to open OBS’s actual context menu, including native submenus, plugin integrations and native action behavior. Unscene validates the selected scene and source item against OBS’s current model, including source instances sharing a name. The original Scenes and Sources docks may be hidden.
+
+For inactive scenes, or if the native selection cannot be safely resolved, right-click instead opens Unscene’s safe context menu. An explicit Activate scene and open OBS menu action (Select preview scene in Studio Mode) is offered for inactive scenes. Right-click never silently changes the program scene. The ellipsis always opens Unscene’s own actions, independently of native selection. Native rename may require the native dock to be visible; use Unscene’s Rename action if needed. Native clipboard copying remains separate from Unscene’s cross-scene clipboard.
+
+![Native OBS context menu with original docks hidden](docs/screenshots/native-context-menu.png)
+
 ## Custom appearance
-Right-click any scene or source row, or use its Appearance action. Choose automatic artwork, one of 13 built-in line icons, or import a local image/icon file. Choose a row color independently; Clear restores the theme color and Reset restores both defaults. Confirm with OK.
+Open a scene or source’s More actions menu and choose Appearance. Choose automatic artwork, one of 13 built-in line icons, or import a local image/icon file. Choose a row color independently; Clear restores the theme color and Reset restores both defaults. Confirm with OK.
 
 Appearance follows the OBS source UUID, so a reused source has consistent artwork and color across scenes. Imported artwork is stored as a bounded PNG in Unscene's own configuration, not as an external file dependency. Custom artwork takes precedence over automatic snapshots. These settings do not change the stream or the native OBS source configuration.
 
