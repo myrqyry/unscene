@@ -54,11 +54,11 @@ Restart OBS and enable **Docks → Unscene**. You can leave the original docks o
 or hide them yourself. To uninstall, close OBS and remove only the installed
 Unscene plugin directory; appearance/navigation settings are separate.
 
-CI builds the pinned Linux OBS 32.2.0 SDK, runs the regression suite and checks
-the test archive and source archive. CI artifacts are preview/test packages,
-not automatically published releases. For a verified Linux test archive,
-extract its `bin/64bit/unscene.so` into the Unscene plugin directory above
-alongside the included LICENSE.
+The [CI workflow](.github/workflows/ci.yml) uses a pinned Linux OBS 32.2.0 SDK,
+runs the regression suite and checks the test and source archives. CI artifacts
+are preview/test packages, not automatically published releases. To install
+from a Linux test archive, extract it into the Unscene plugin directory above,
+preserving `bin/64bit/unscene.so` and the `LICENSE` at the archive root.
 
 ## Important limitations
 
