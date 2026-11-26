@@ -90,3 +90,15 @@ User approved preparing Unscene for a public preview, not changing repository vi
 
 ## 2026-11-25 PR #1 review follow-up
 PR reviewed at fcb5f61: hosted CI run 45753113080 did not start because GitHub Actions budget prevented execution (not a code/build failure). Codex filter restore callback confirmed against libobs and reproduced with a registered fixture source/filter: serialized value 73, parent and final index 1, callback absent before fix and exactly once after attach/reorder in the fixed path. Kilo checkbox signal reproduced by editing tooltip/name; restricted model dataChanged to CheckStateRole, respecting blocked list during repopulation and rapid opposite check state changes. Replaced 512-entry whole-cache flush with Qt QCache LRU, retained QPixmap storage and original capture safety gates; tested bounded eviction and retained recently accessed entry. Named max drag scroll speed. Declined increasing snapshots per tick or removing the immediately pre-readback output guard (intentional graphics safety); QSettings already retains a settings instance, render occurs only on changes, not every poll, so no speculative appearance cache; 96-node bound counts flattened expanded/search-visible hierarchy rather than full collection, matches deliberate UI motion budget; 400ms cadence stays fixed and documented. RED real filter callback + tooltip regression, missing cache test API; GREEN 18/18 tests in final Release build, CI floor raised to 18. Actual third-party filter undo and >512-source UI/GPU behavior not separately smoke-tested; native callback test is real libobs without graphics initialization, not full OBS UI. PR #1 was merged by user/another actor during investigation; remote main now fcb5f61. Preserve local follow-up commit, no direct push to merged main, no visibility change or release.
+
+## Cross-platform CI candidate — 2026-11-26
+
+Latest hosted Linux run 45905573913 compiled the real OBS32 SDK and plugin,
+17/18 tests passed; filter-restore-test failed only at obs_startup (no X display).
+Reproduced locally headless, wrapped that exact test with isolated Xvfb, 18/18
+local Release CTests passed without DISPLAY/WAYLAND_DISPLAY. Expanded existing
+immutable shared workflow to full eight jobs, caller adapter retained.
+Native SDK bootstrap adapted from qualified Streaming Media 875f6b1; preserve
+legacy Linux32 archive and SDK recipe, new OBS33/Windows layouts and macOS
+bundles, enforce test floor and no skipped tests. Native adapter fixture tests
+pass; actual non-Linux and OBS33 hosted builds pending. No release or merge.

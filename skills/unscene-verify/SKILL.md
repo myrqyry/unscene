@@ -5,7 +5,7 @@ description: Use when building Unscene, diagnosing a module load failure, or ver
 
 # Verify Unscene
 
-Run from the Unscene repository root.
+Run from the Unscene repository root. For cross-platform CI use the shared obs-plugin-ci specialist and docs/ci.md; report actual hosted evidence separately.
 
 1. Check the target in `.github/workflows/ci.yml` and `.github/scripts/ci-verify.sh`. Use matching `libobs` and `obs-frontend-api` SDK packages; follow `README.md` → Build and install for the CMake flags. A local build against a newer SDK is not evidence that the module loads on the supported target.
 2. Run the README configure, build, and CTest steps. Stage with `cmake --install build --prefix <temporary-directory>` and check that the prefix contains `bin/64bit/unscene.so` and `LICENSE`.

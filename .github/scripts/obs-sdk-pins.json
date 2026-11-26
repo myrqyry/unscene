@@ -1,0 +1,10 @@
+{
+  "32.2.0": {
+    "source_sha256": "c333e4a7d5c4a94c7bb4833f046368e0ac5e981fb3964ca4981b23be1dfbda4a",
+    "dependencies": "2026-07-15"
+  },
+  "33.0.3": {
+    "source_sha256": "b0eff217a972e1dd9951ce24d66595c723dde847461b16de07eb33d75ec34659",
+    "dependencies": "2026-10-23"
+  }
+}

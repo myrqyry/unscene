@@ -15,10 +15,10 @@ Unscene is a native OBS Studio dock that brings the entire scene collection into
 
 ## Architecture and ownership boundaries
 
-- **C++/CMake native plugin** targeting OBS 32.2.0 on Linux x86_64. Qt 6 widgets. libobs + libobs-frontend-api.
+- **C++/CMake native plugin** with a verified local OBS 32.2.0 Linux x86_64 baseline; expanded CI targets OBS 32.2.0/33.0.3 on Linux, Windows and macOS (qualification pending). Qt 6 widgets. libobs + libobs-frontend-api.
 - **Plugin**: `unscene.so`. CMake target: `unscene`.
 - **Core modules**: scene hierarchy, scene/source selection, thumbnail cache, navigation/search, appearance/theme, source management (add/remove/copy/rename/reorder), drag scroll, motion system, inspector (transform/filters/usage), portable transfers (filter stack / single-source JSON), native OBS context menus.
-- **CI**: The [pinned shared workflow](../.github/workflows/ci.yml) uses the [repository's CI driver](../.github/scripts/ci-verify.sh) for Linux x86_64 / OBS 32.2.0. The workflow sets the test floor; the driver builds and checks binary and source archives.
+- **CI**: The [pinned shared workflow](../.github/workflows/ci.yml) uses the [repository's CI driver](../.github/scripts/ci-verify.sh) for the full eight-job matrix. The caller owns native SDK preparation and exact package layouts; the Linux OBS32 job emits the source archive. The workflow sets the test floor. See docs/ci.md for qualification.
 - **Testing**: [CMake](../CMakeLists.txt) registers the CTest suite. Use isolated OBS profiles for runtime verification.
 
 ## Known-good workflows
