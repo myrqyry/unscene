@@ -1,0 +1,20 @@
+name: Build and test
+on:
+  push:
+    branches: [main, ci/public-preview]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    uses: myrqyry/obs-plugin-ci/.github/workflows/build.yml@afeed7458c9fa5da341cc464042fa0f878ecf33c
+    with:
+      module: unscene
+      profile: linux-obs32
+      driver: caller
+      source-package: true
+      minimum-tests: 17
