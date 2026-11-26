@@ -85,6 +85,8 @@ protected:
  void paintEvent(QPaintEvent*event) override{
   QWidget::paintEvent(event);QPainter p(this);p.setRenderHint(QPainter::Antialiasing);
   const auto surface=rect();
+  if(parentWidget()&&parentWidget()->property("unsceneReordering").toBool())
+   p.fillRect(surface,nativeList?nativeList->palette().brush(QPalette::Base):palette().brush(QPalette::Window));
   if(selected||hoverAmount>0){
    p.save();if(!selected)p.setOpacity(hoverAmount);
    auto*view=nativeList?static_cast<QWidget*>(nativeList.data()):this;

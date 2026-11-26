@@ -31,6 +31,7 @@
 #include <QSaveFile>
 #include "order.hpp"
 #include "drag-scroll.hpp"
+#include "reorder-motion.hpp"
 #include <QHideEvent>
 #include <QJsonObject>
 #include <QSplitter>
@@ -282,7 +283,7 @@ void restorePortableItem(const char*data){
  if(input)if(auto*newItem=payload->item.paste(scene,input.get())){obs_sceneitem_set_id(newItem,id);obs_frontend_save();}
 }
 class Dock : public QWidget {
- QListView *nativeList; QVBoxLayout *rows; QVBoxLayout *dockLayout; QToolBar*bar; QScrollArea *scroll; QWidget *body; QTimer timer;
+ QListView *nativeList; ReorderLayout *rows; QVBoxLayout *dockLayout; QToolBar*bar; QScrollArea *scroll; QWidget *body; QTimer timer;
  Inspector*inspector; QSplitter*splitter;
  std::optional<Node> inspected;
  QString inspectorCollection;
@@ -532,7 +533,7 @@ class Dock : public QWidget {
  QHash<QString,RowEntry> rowEntries;
  QVector<QString> rowOrder;
  QPointer<Row> dropMarker;
- QString dragCollection,dragKey;
+ QString dragCollection,dragKey,reorderLead;
  QTimer dragScrollTimer;
  QPoint dragPosition;
  void clearDrag(){
@@ -577,6 +578,7 @@ class Dock : public QWidget {
  }
  bool dragMove(const Node&from,QPoint pos){
   if(stopping||searching()||from.scene||from.locked||!sameCollection(collection))return false;
+  if(rows->moving())rows->finish();
   if(dragKey!=from.key){clearDrag();dragKey=from.key;dragCollection=collection;}
   dragPosition=pos;
   auto valid=updateDropMarker(from,pos);updateDragScroll();return valid;
@@ -587,6 +589,7 @@ class Dock : public QWidget {
   auto*i=scene?obs_scene_find_sceneitem_by_id(scene,n.id):nullptr;
   if(!i||uuid(obs_sceneitem_get_source(i))!=n.uid||obs_sceneitem_locked(i))return;
   if(!applyOrder(scene,before,after))return;
+  reorderLead=n.key;
   auto undo=OrderUndo{expected,n.parent,after,before}.encode(),redo=OrderUndo{expected,n.parent,before,after}.encode();
   auto title=("Unscene: reorder "+n.title).toUtf8();
   obs_frontend_add_undo_redo_action(title.constData(),restoreOrder,restoreOrder,undo.constData(),redo.constData(),false);
@@ -635,13 +638,14 @@ class Dock : public QWidget {
   retiring.clear();
  }
  bool layoutMoving()const{
+  if(rows->moving())return true;
   for(auto shell:retiring)if(shell&&shell->moving())return true;
   for(const auto&e:rowEntries)if(e.shell->moving()||e.row->motionActive())return true;
   return false;
  }
  void setMotion(int ms){
   motionDuration=ms;navigation.saveMotion(ms);
-  if(!ms)finishRetiring();
+  if(!ms){rows->finish();finishRetiring();}
   for(auto&e:rowEntries){e.row->setMotionDuration(ms);if(!ms)e.shell->finish();}
   for(auto*b:toolbar)b->setMotionDuration(ms);
  }
@@ -1074,6 +1078,16 @@ class Dock : public QWidget {
  }
  void render(const QVector<Node>&nodes){
   clearDrag();
+  const auto origins=rows->positions();
+  bool reorder=motionDuration&&!resetRows&&!searching()&&retiring.isEmpty()&&nodes.size()==rowOrder.size()&&nodes.size()<=96;
+  bool changedOrder=false;
+  if(reorder)for(int i=0;i<nodes.size();++i){
+   const auto&n=nodes[i];auto it=rowEntries.find(n.key);
+   if(it==rowEntries.end()||!(it->node==n)||it->shell->moving()||it->row->motionActive()){reorder=false;break;}
+   changedOrder|=rowOrder[i]!=n.key;
+  }
+  reorder=reorder&&changedOrder;
+  rows->finish();
   const int pos=scroll->verticalScrollBar()->value();
   labels.clear();keys.clear();artworkOverrides.clear();snapshotKeys.clear();
   finishRetiring();
@@ -1174,6 +1188,11 @@ class Dock : public QWidget {
    auto*empty=new QLabel(searching()?"No matching scenes or sources":"No scenes",body);empty->setProperty("unsceneEmpty",true);empty->setAlignment(Qt::AlignCenter);empty->setContentsMargins(4,12,4,12);rows->addWidget(empty);
   }
   rows->addStretch(); scroll->verticalScrollBar()->setValue(pos);
+  if(reorder){
+   rows->activate();auto preferred=rowEntries.find(reorderLead.isEmpty()?selected:reorderLead);
+   rows->animateFrom(origins,motionDuration,preferred==rowEntries.end()?nullptr:preferred->shell);
+  }
+  reorderLead.clear();
  }
 public:
  Dock(){
@@ -1190,7 +1209,7 @@ public:
   search=new QLineEdit(bar);search->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);search->setPlaceholderText("Find scenes or sources…");search->setClearButtonEnabled(true);search->setAccessibleName("Find scenes or sources");search->setMinimumWidth(50);
   bar->addWidget(search);bar->addWidget(refreshButton);bar->addWidget(collapse);bar->addWidget(expand);bar->addWidget(settingsButton);l->addWidget(bar);
   connect(search,&QLineEdit::textChanged,this,[this](const QString&t){query=t;animateStructure=true;collapse->setEnabled(!searching());expand->setEnabled(!searching());dirty=true;request();});
-  scroll=new QScrollArea(this);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);body=new QWidget;rows=new QVBoxLayout(body);rows->setContentsMargins(0,0,0,0);rows->setSpacing(1);scroll->setWidget(body);
+  scroll=new QScrollArea(this);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);body=new QWidget;rows=new ReorderLayout(body);rows->setContentsMargins(0,0,0,0);rows->setSpacing(1);scroll->setWidget(body);
   splitter=new QSplitter(Qt::Vertical,this);splitter->setChildrenCollapsible(false);splitter->addWidget(scroll);
   inspector=new Inspector(configPath("transform-presets.ini"),splitter);splitter->addWidget(inspector);inspector->hide();l->addWidget(splitter,1);
   inspector->onUsageRefresh=[this]{refreshInspectorExtras(true);};
@@ -1213,8 +1232,8 @@ public:
   bar->updateGeometry();
  }
  void themeChanged(){themeGeometry();resetRows=true;dirty=true;request();}
- void hideEvent(QHideEvent*e)override{clearDrag();QWidget::hideEvent(e);}
- void stop(){stopping=true;clearDrag();timer.stop();}
+ void hideEvent(QHideEvent*e)override{clearDrag();rows->finish();QWidget::hideEvent(e);}
+ void stop(){stopping=true;clearDrag();rows->finish();timer.stop();}
  void refresh(){
   if(stopping||editingAppearance||!isVisible())return;
   char *raw=obs_frontend_get_current_scene_collection();QString now=QString::fromUtf8(raw?raw:"");bfree(raw);
