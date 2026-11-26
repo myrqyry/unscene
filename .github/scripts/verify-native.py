@@ -54,14 +54,14 @@ def digest(path):
         return hashlib.file_digest(f, "sha256").hexdigest()
 
 
-def download(url, path, expected):
+def download(url, path, expected, *, timeout=120):
     request = urllib.request.Request(url, headers={"User-Agent": "unscene-native-ci"})
     for attempt in range(1, 4):
         temporary = None
         try:
             with tempfile.NamedTemporaryFile(dir=path.parent, prefix=path.name + ".", delete=False) as dst:
                 temporary = Path(dst.name)
-                with urllib.request.urlopen(request, timeout=120) as src:
+                with urllib.request.urlopen(request, timeout=timeout) as src:
                     shutil.copyfileobj(src, dst)
             if digest(temporary) != expected:
                 raise RuntimeError(f"SHA-256 mismatch: {path.name}")
