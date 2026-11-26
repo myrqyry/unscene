@@ -95,5 +95,19 @@ int main(int argc,char**argv){
  button->setCircular(true);app.processEvents();CHECK(button->sizeHint().width()==button->sizeHint().height());
  auto circular=button->grab().toImage();
  CHECK(circular.pixelColor(1,1)!=squareBefore.pixelColor(1,1));
+ // Row controls use the owning surface, not the global gray button fill.
+ QWidget tonalHost;tonalHost.setStyleSheet("QWidget#tonalHost {background:#512d45;} QToolButton {background:#777777; padding:5px;}");
+ tonalHost.setObjectName("tonalHost");auto*tonalLayout=new QHBoxLayout(&tonalHost);
+ auto*chevron=new GlyphButton("right",&tonalHost);chevron->setCircular(true);tonalLayout->addWidget(chevron);
+ chevron->setTonalColors(QColor("#512d45"),QColor("#f9d9ed"));
+ tonalHost.show();app.processEvents();QApplication::sendEvent(chevron,&leave);
+ const auto rest=tonalHost.grab().toImage();const QPoint sample=chevron->pos()+QPoint(chevron->width()/2,3);
+ CHECK(rest.pixelColor(sample)==QColor("#512d45"));
+ QEnterEvent enter(QPointF(10,10),QPointF(10,10),QPointF(10,10));QApplication::sendEvent(chevron,&enter);
+ CHECK(tonalHost.grab().toImage().pixelColor(sample)!=rest.pixelColor(sample));
+ QApplication::sendEvent(chevron,&leave);
+ auto*live=new GlyphButton("live",&tonalHost);live->setCircular(true);live->setTonalColors(QColor("#512d45"),QColor("#f9d9ed"));tonalLayout->addWidget(live);
+ app.processEvents();QApplication::sendEvent(live,&leave);
+ CHECK(tonalHost.grab().toImage().pixelColor(live->pos()+QPoint(live->width()/2,3))!=QColor("#512d45"));
  return 0;
 }

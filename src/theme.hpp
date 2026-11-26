@@ -13,6 +13,7 @@
 #include <QStyleOptionViewItem>
 #include <QLayout>
 #include "appearance.hpp"
+#include "scene-palette.hpp"
 
 inline QPixmap glyphPixmap(const QString &id,const QColor&color,int size,qreal dpr=1){
  static const QHash<QString,QString> paths={
@@ -69,6 +70,7 @@ inline QSize nativeItemSize(const QWidget*w,const QSize&content){
 }
 class GlyphButton:public QToolButton{
  QString glyph;
+ QColor tonalSurface,tonalInk;
  QVariantAnimation hoverMotion,angleMotion,alphaMotion;
  qreal hover=0,angle=0,alpha=1;
  int duration=0;
@@ -100,6 +102,10 @@ public:
   animate(alphaMotion,alpha,showAction?1:0);
  }
  void spin(){if(!duration)return;angleMotion.stop();angle=0;animate(angleMotion,0,360);}
+ void setTonalColors(const QColor&surface,const QColor&ink){
+  if(tonalSurface==surface&&tonalInk==ink)return;
+  tonalSurface=surface;tonalInk=ink;update();
+ }
  void setIndicatorOnly(bool value){
   indicatorOnly=value;
   setCursor(value?Qt::ArrowCursor:Qt::PointingHandCursor);
@@ -127,15 +133,35 @@ protected:
  void leaveEvent(QEvent*e)override{if(duration)animate(hoverMotion,hover,0);else{hover=0;update();}QToolButton::leaveEvent(e);}
  void paintEvent(QPaintEvent*)override{
   QPainter p(this);p.setRenderHint(QPainter::Antialiasing);p.setOpacity(alpha);
-  if(circular){QPainterPath clip;const qreal side=qMin(width(),height());clip.addEllipse(QRectF((width()-side)/2,(height()-side)/2,side,side));p.setClipPath(clip);}
+  if(circular&&!tonalSurface.isValid()){QPainterPath clip;const qreal side=qMin(width(),height());clip.addEllipse(QRectF((width()-side)/2,(height()-side)/2,side,side));p.setClipPath(clip);}
   QStyleOptionToolButton opt;initStyleOption(&opt);opt.iconSize=themedIconSize();
-  const auto fg=palette().color(isEnabled()?QPalette::Active:QPalette::Disabled,QPalette::ButtonText);
+  QColor fg=palette().color(isEnabled()?QPalette::Active:QPalette::Disabled,QPalette::ButtonText);
+  const bool tonal=tonalSurface.isValid()&&tonalInk.isValid();
+  if(tonal){
+   const bool live=glyph=="live";
+   const auto baseInk=contrastInk(tonalSurface,tonalInk,3);
+   const auto fill=live?mixColor(tonalSurface,baseInk,.76):tonalSurface;
+   fg=contrastInk(fill,live?tonalSurface:baseInk,3);
+   const qreal side=qMin(width(),height());
+   const qreal inset=qMin(2.0,side*.08);
+   QRectF shape=QRectF(rect()).adjusted(inset,inset,-inset,-inset);
+   if(circular)shape=QRectF((width()-side)/2+inset,(height()-side)/2+inset,side-2*inset,side-2*inset);
+   const qreal radius=circular?shape.height()/2:qMin(shape.height()/2,6.0);
+   if(live){p.setPen(Qt::NoPen);p.setBrush(fill);p.drawRoundedRect(shape,radius,radius);}
+   if(!indicatorOnly){
+    auto state=fg;state.setAlphaF(isDown()?.18:.12*hover);
+    if(state.alpha()>0){p.setPen(Qt::NoPen);p.setBrush(state);p.drawRoundedRect(shape,radius,radius);}
+    if(hasFocus()&&focusPolicy()!=Qt::NoFocus){QPen pen(fg);pen.setWidthF(1);p.setPen(pen);p.setBrush(Qt::NoBrush);p.drawRoundedRect(shape.adjusted(.5,.5,-.5,-.5),radius,radius);}
+   }
+   if(!isEnabled())p.setOpacity(alpha*.55);
+  }
   const int size=opt.iconSize.width();
   auto pix=glyphPixmap(glyph,fg,size,devicePixelRatioF());
   if(qAbs(angle)>0.01&&qAbs(angle-360)>0.01){
    QPixmap rotated(pix.size());rotated.setDevicePixelRatio(pix.devicePixelRatio());rotated.fill(Qt::transparent);
    QPainter painter(&rotated);painter.setRenderHint(QPainter::SmoothPixmapTransform);painter.translate(size/2.0,size/2.0);painter.rotate(angle);painter.drawPixmap(QPointF(-size/2.0,-size/2.0),pix);painter.end();pix=rotated;
   }
+  if(tonal){p.drawPixmap(QPointF((width()-size)/2.0,(height()-size)/2.0),pix);return;}
   opt.icon=QIcon(pix);opt.icon.addPixmap(pix,QIcon::Disabled);
   if(indicatorOnly){
    opt.state&=~(QStyle::State_MouseOver|QStyle::State_Sunken|QStyle::State_HasFocus);

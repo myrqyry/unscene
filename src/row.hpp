@@ -82,7 +82,7 @@ public:
   name->installEventFilter(this);thumb->installEventFilter(this);top->installEventFilter(this);
   status=new ElidedLabel("",top);status->hide();first->addWidget(status);status->setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Preferred);
   secondary=new QWidget(this);extra=new QHBoxLayout(secondary);extra->setContentsMargins(0,0,0,0);extra->addStretch();secondaryReveal=new Reveal(secondary,this);outer->addWidget(secondaryReveal);
-  applyGeometry();refreshRoles();setExpanded(open);
+  applyGeometry();refreshRoles();applyInk();setExpanded(open);
  }
  void setDisclosure(bool enabled,bool open){disclosure->setVisible(enabled);disclosure->setAngle(open?90:0);disclosure->setToolTip(open?"Collapse":"Expand");}
  void setSelected(bool value){selected=value;applyInk();update();}
@@ -219,12 +219,17 @@ private:
   top->setMinimumHeight(qMax(fontMetrics().height(),native.height()-2*insetY));
   ready=true;updateGeometry();
  }
+ void styleControl(GlyphButton*b){
+  const auto bg=selected?palette().color(QPalette::Highlight):isScene?roles.header:branchEnabled?roles.container:palette().color(QPalette::Base);
+  const auto fg=selected?palette().color(QPalette::HighlightedText):isScene?roles.onHeader:branchEnabled?roles.onContainer:palette().color(QPalette::WindowText);
+  b->setTonalColors(bg,fg);
+ }
  void applyInk(){
   const auto fg=inkColor();
   for(auto*l:{name,status}){auto p=l->palette();p.setColor(QPalette::WindowText,fg);p.setColor(QPalette::Text,fg);l->setPalette(p);l->setInk(fg);}
-  disclosure->update();for(auto*b:hoverButtons)b->update();for(auto*b:secondaryButtons)b->update();
+  styleControl(disclosure);for(auto*b:hoverButtons)styleControl(static_cast<GlyphButton*>(b));for(auto*b:secondaryButtons)styleControl(static_cast<GlyphButton*>(b));
  }
  QToolButton*makeButton(const QString&tip,const QString&icon,std::function<void()>action){
-  auto*b=new GlyphButton(icon,this);b->setMotionDuration(duration);b->setToolTip(tip);b->setAccessibleName(tip);connect(b,&QToolButton::clicked,this,[a=std::move(action)]{a();});return b;
+  auto*b=new GlyphButton(icon,this);styleControl(b);b->setMotionDuration(duration);b->setToolTip(tip);b->setAccessibleName(tip);connect(b,&QToolButton::clicked,this,[a=std::move(action)]{a();});return b;
  }
 };
