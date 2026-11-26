@@ -1134,6 +1134,7 @@ class Dock : public QWidget {
    r->setDisclosure(n.scene||n.group,isOpen);
    r->thumb->setFixedSize(thumbnailSize(density(n),n.scene));
    r->setSelected(n.program||n.preview||expanded);
+   r->setSourceVisible(n.visible);
    r->setStatus(!n.program&&n.preview?"PREVIEW":"");
    r->thumb->setPixmap(sourceArtwork(n,r));
    labels.insert(n.key,r->thumb);keys.insert(n.uid,n.key);

@@ -70,6 +70,8 @@ For inactive scenes, or if the native selection cannot be safely resolved, right
 ## Dynamic scene colors
 Scene appearance colors seed a Material 3 Expressive-inspired tonal hierarchy: low-chroma source-area containers, stronger scene header containers, distinct source accent markers and contrast-checked foreground roles. Light/dark tones are derived from the active OBS palette, not fixed theme colors. Scenes set to Theme default use the active OBS Highlight color as their seed for both header and source-area surfaces, automatically following theme changes without storing a custom color; reused sources inherit their containing scene's surface while retaining their own accent. Native live/preview and selected-row highlights remain authoritative. The local OKLab gamut-mapped implementation adapts [Material dynamic color principles](https://github.com/material-foundation/material-color-utilities/blob/main/concepts/dynamic_color_scheme.md) rather than implementing Google's exact HCT Expressive scheme. No new graphics capture or runtime dependency.
 
+Hidden sources retain their scene container color and full-strength controls, with subtly dimmed artwork and contrast-aware text. Visibility changes restore normal appearance automatically.
+
 ## Custom appearance
 Open a scene or source’s More actions menu and choose Appearance. Choose automatic artwork, one of 13 built-in line icons, or import a local image/icon file. Choose a scene seed or individual source accent independently; Clear restores the theme color and Reset restores both defaults. Confirm with OK.
 

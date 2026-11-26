@@ -46,5 +46,21 @@ int main(int argc,char**argv) {
  inactive.addSceneActivation(false,false,false,[&]{++activated;});
  inactive.show();app.processEvents();QApplication::sendEvent(&inactive,&leave);
  if(!inactive.hoverButtons.first()->isHidden())return 12;
+ QPalette pal;pal.setColor(QPalette::Base,QColor("#242424"));pal.setColor(QPalette::WindowText,QColor("#eeeeee"));
+ pal.setColor(QPalette::Highlight,QColor("#774466"));pal.setColor(QPalette::HighlightedText,Qt::white);
+ Row hidden("Hidden source",false,false,1);hidden.setPalette(pal);
+ hidden.setBranchColor(QColor("#e05090"),true,true);
+ hidden.addHover("Show source","eye-off",[]{},true);
+ QPixmap art(20,20);art.fill(Qt::white);hidden.thumb->setPixmap(art);
+ hidden.resize(320,44);hidden.show();app.processEvents();
+ QApplication::sendEvent(&hidden,&leave);
+ const auto full=hidden.inkColor();const auto visibleArt=hidden.thumb->grab().toImage().pixelColor(hidden.thumb->width()/2,hidden.thumb->height()/2);
+ hidden.setSourceVisible(false);app.processEvents();
+ if(hidden.inkColor()==full||surfaceContrast(hidden.inkColor(),sceneSurfaceRoles(pal,QColor("#e05090")).container)<4.5)return 13;
+ if(hidden.thumb->grab().toImage().pixelColor(hidden.thumb->width()/2,hidden.thumb->height()/2)==visibleArt)return 14;
+ if(hidden.hoverButtons.first()->isHidden()||!hidden.hoverButtons.first()->isEnabled())return 15;
+ hidden.setSelected(true);if(surfaceContrast(hidden.inkColor(),pal.color(QPalette::Highlight))<4.5)return 16;
+ hidden.setSelected(false);hidden.setSourceVisible(true);app.processEvents();
+ if(hidden.inkColor()!=full||hidden.thumb->grab().toImage().pixelColor(hidden.thumb->width()/2,hidden.thumb->height()/2)!=visibleArt)return 17;
  return 0;
 }
