@@ -12,6 +12,10 @@ import shutil
 import subprocess
 import tarfile
 import urllib.request
+import urllib.error
+import http.client
+import tempfile
+import time
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -52,10 +56,28 @@ def digest(path):
 
 def download(url, path, expected):
     request = urllib.request.Request(url, headers={"User-Agent": "unscene-native-ci"})
-    with urllib.request.urlopen(request, timeout=120) as src, path.open("wb") as dst:
-        shutil.copyfileobj(src, dst)
-    if digest(path) != expected:
-        raise RuntimeError(f"SHA-256 mismatch: {path.name}")
+    for attempt in range(1, 4):
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=path.parent, prefix=path.name + ".", delete=False) as dst:
+                temporary = Path(dst.name)
+                with urllib.request.urlopen(request, timeout=120) as src:
+                    shutil.copyfileobj(src, dst)
+            if digest(temporary) != expected:
+                raise RuntimeError(f"SHA-256 mismatch: {path.name}")
+            temporary.replace(path)
+            return
+        except urllib.error.HTTPError as exc:
+            if attempt == 3 or exc.code not in (408, 429, 500, 502, 503, 504):
+                raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead):
+            if attempt == 3:
+                raise
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        print(f"Transient download failure for {path.name}; retry {attempt + 1}/3", flush=True)
+        time.sleep(2 ** attempt)
 
 
 def source_archive(work, version):

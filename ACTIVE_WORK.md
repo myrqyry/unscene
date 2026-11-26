@@ -113,3 +113,14 @@ actual uses with normal Qt mouse events and a precise timer/event loop.
 No assertion or test removed. GREEN full local Release build with
 QtTest disabled, headless 18/18 CTests, row/motion also pass on minimal.
 Hosted native qualification pending. No OBS install, merge or release.
+
+## Intel macOS and native download follow-up
+Run 45907364027: 5/8 platform legs passed, both Intel macOS compiled then
+portable-source-test segfaulted (17/18); Windows33 source download timed
+out. Fixed definite dangling QJsonValueRef from temporary nested object
+in portable-source.hpp; RED ownership static_assert, GREEN by-value
+lookup, expanded round-trip and malformed coordinate coverage. Linux
+ASan did not reproduce crash; hosted Intel confirmation pending. Added
+bounded native download retries with temporary verified publication and
+immediate checksum failure. RED timeout/corrupt-file tests, GREEN 4/4
+adapter tests and 18/18 headless local Release CTests. No merge/release.

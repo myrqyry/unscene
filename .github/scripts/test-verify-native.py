@@ -1,4 +1,7 @@
 import importlib.util
+import hashlib
+import io
+from unittest.mock import patch
 from pathlib import Path
 import tempfile
 import unittest
@@ -8,6 +11,26 @@ native = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(native)
 
 class NativeContract(unittest.TestCase):
+    def test_download_retries_timeout_and_checks_digest(self):
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "source.tar.gz"
+            payload = b"pinned archive"
+            expected = hashlib.sha256(payload).hexdigest()
+            with patch.object(native.urllib.request, "urlopen", side_effect=[TimeoutError("timeout"), io.BytesIO(payload)]) as request, patch("time.sleep"):
+                native.download("https://example.invalid/source", target, expected)
+                self.assertEqual(request.call_count, 2)
+            self.assertEqual(target.read_bytes(), payload)
+
+    def test_download_does_not_publish_corrupt_bytes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "source.tar.gz"
+            with patch.object(native.urllib.request, "urlopen", return_value=io.BytesIO(b"bad")) as request:
+                with self.assertRaisesRegex(RuntimeError, "SHA-256 mismatch"):
+                    native.download("https://example.invalid/source", target, "0" * 64)
+                self.assertEqual(request.call_count, 1)
+            self.assertFalse(target.exists())
+            self.assertEqual(list(Path(temp).iterdir()), [])
+
     def test_layouts(self):
         self.assertEqual(native.module_relative_path("windows-x64", "32.2.0").as_posix(), "unscene/bin/64bit/unscene.dll")
         self.assertEqual(native.module_relative_path("windows-x64", "33.0.3").as_posix(), "unscene/unscene.dll")

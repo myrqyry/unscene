@@ -2,6 +2,7 @@
 #include "portable-filter.hpp"
 #include "item-copy.hpp"
 #include "inspector.hpp"
+#include <type_traits>
 
 struct PortableSource {QJsonObject source;ItemCopy item;};
 inline QByteArray encodePortableSource(const QJsonObject&source,const ItemCopy&i){
@@ -25,7 +26,8 @@ inline std::optional<PortableSource> decodePortableSource(const QByteArray&bytes
  TransformState t;
  if(o.contains("transform")){
   if(!o["transform"].isObject())return {};
-  auto a=o["transform"].toObject();auto xy=[&](const char*k,const char*axis){return a[k].toObject()[axis];};
+  auto a=o["transform"].toObject();auto xy=[&](const char*k,const char*axis){return a.value(k).toObject().value(axis);};
+  static_assert(std::is_same_v<decltype(xy("pos","x")),QJsonValue>, "Nested JSON lookup must return an owning value");
   QJsonArray fields{xy("pos","x"),xy("pos","y"),xy("scale","x"),xy("scale","y"),a["rot"],a["alignment"],a["bounds_type"],a["bounds_alignment"],xy("bounds","x"),xy("bounds","y"),(a.contains("crop_to_bounds")?a["crop_to_bounds"]:QJsonValue(false)),a["left"],a["top"],a["right"],a["bottom"]};
   auto decoded=TransformState::decode(QJsonDocument(fields).toJson(QJsonDocument::Compact));if(!decoded)return {};t=*decoded;
  }

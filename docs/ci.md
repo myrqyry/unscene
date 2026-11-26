@@ -48,3 +48,16 @@ timer and event loop. The local configure/build with
 CMAKE_DISABLE_FIND_PACKAGE_Qt6Test=TRUE passed all 18 tests; the row and
 motion tests also passed on Qt minimal. Native hosted requalification
 of this change remains pending.
+
+PR run [45907364027](https://github.com/myrqyry/unscene/actions/runs/45907364027)
+passed Linux 32/33, Windows 32, and macOS ARM64 32/33, with five binary
+artifacts plus source. Both Intel macOS builds compiled successfully but
+portable-source-test segfaulted; Windows 33 timed out downloading the
+pinned source. Fixed a dangling QJsonValueRef returned by the nested
+transform lookup (compile-time ownership assertion fails before fix),
+and expanded coordinate/malformed-input coverage. Linux ASan did not
+reproduce the hosted crash, so causality awaits Intel confirmation.
+Native downloads now use three bounded attempts for transient network
+failures, temporary files and digest verification before publication;
+checksum mismatches fail immediately. All 18 local CTests and four
+native adapter tests pass. New hosted qualification required.
