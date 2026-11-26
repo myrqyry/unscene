@@ -1,6 +1,6 @@
 #include "../src/row.hpp"
 #include <QApplication>
-#include <QTest>
+#include "widget-events.hpp"
 #include <cassert>
 int main(int argc,char**argv) {
  QApplication app(argc,argv);
@@ -9,7 +9,7 @@ int main(int argc,char**argv) {
  scene.addHover("Activate","arrow-right",[&]{++activated;});
  scene.onBody=[&]{++expanded;};
  scene.show(); app.processEvents();
- QTest::mouseClick(scene.name,Qt::LeftButton);
+ TestEvents::mouseClick(scene.name,Qt::LeftButton);
  if(expanded!=1 || activated!=0) return 1;
  scene.hoverButtons[0]->click();
  if(activated!=1 || expanded!=1) return 2;
@@ -18,16 +18,16 @@ int main(int argc,char**argv) {
  item.onBody=[&]{item.setExpanded(!item.expanded());};
  item.show(); app.processEvents();
  if(item.expanded()) return 3;
- QTest::mouseClick(item.name,Qt::LeftButton);
+ TestEvents::mouseClick(item.name,Qt::LeftButton);
  if(!item.expanded() || item.secondary->isHidden()) return 4;
  item.secondaryButtons[0]->click();
  if(properties!=1 || !item.expanded()) return 5;
- QTest::mouseClick(item.name,Qt::LeftButton);
+ TestEvents::mouseClick(item.name,Qt::LeftButton);
  if(item.expanded())return 6;
  // A cancelled press must not expand a row on its eventual release.
- QTest::mousePress(item.name,Qt::LeftButton);
+ TestEvents::mousePress(item.name,Qt::LeftButton);
  item.cancelGesture();
- QTest::mouseRelease(item.name,Qt::LeftButton);
+ TestEvents::mouseRelease(item.name,Qt::LeftButton);
  if(item.expanded())return 7;
  Row live("Program",true,false,0);
  live.addSceneActivation(true,false,false,[&]{++activated;});

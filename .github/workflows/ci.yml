@@ -14,7 +14,7 @@ jobs:
     uses: myrqyry/obs-plugin-ci/.github/workflows/build.yml@afeed7458c9fa5da341cc464042fa0f878ecf33c
     with:
       module: unscene
-      profile: linux-obs32
+      profile: full
       driver: caller
       source-package: true
       minimum-tests: 18

@@ -90,3 +90,37 @@ User approved preparing Unscene for a public preview, not changing repository vi
 
 ## 2026-11-25 PR #1 review follow-up
 PR reviewed at fcb5f61: hosted CI run 45753113080 did not start because GitHub Actions budget prevented execution (not a code/build failure). Codex filter restore callback confirmed against libobs and reproduced with a registered fixture source/filter: serialized value 73, parent and final index 1, callback absent before fix and exactly once after attach/reorder in the fixed path. Kilo checkbox signal reproduced by editing tooltip/name; restricted model dataChanged to CheckStateRole, respecting blocked list during repopulation and rapid opposite check state changes. Replaced 512-entry whole-cache flush with Qt QCache LRU, retained QPixmap storage and original capture safety gates; tested bounded eviction and retained recently accessed entry. Named max drag scroll speed. Declined increasing snapshots per tick or removing the immediately pre-readback output guard (intentional graphics safety); QSettings already retains a settings instance, render occurs only on changes, not every poll, so no speculative appearance cache; 96-node bound counts flattened expanded/search-visible hierarchy rather than full collection, matches deliberate UI motion budget; 400ms cadence stays fixed and documented. RED real filter callback + tooltip regression, missing cache test API; GREEN 18/18 tests in final Release build, CI floor raised to 18. Actual third-party filter undo and >512-source UI/GPU behavior not separately smoke-tested; native callback test is real libobs without graphics initialization, not full OBS UI. PR #1 was merged by user/another actor during investigation; remote main now fcb5f61. Preserve local follow-up commit, no direct push to merged main, no visibility change or release.
+
+## Cross-platform CI candidate — 2026-11-26
+
+Latest hosted Linux run 45905573913 compiled the real OBS32 SDK and plugin,
+17/18 tests passed; filter-restore-test failed only at obs_startup (no X display).
+Reproduced locally headless, wrapped that exact test with isolated Xvfb, 18/18
+local Release CTests passed without DISPLAY/WAYLAND_DISPLAY. Expanded existing
+immutable shared workflow to full eight jobs, caller adapter retained.
+Native SDK bootstrap adapted from qualified Streaming Media 875f6b1; preserve
+legacy Linux32 archive and SDK recipe, new OBS33/Windows layouts and macOS
+bundles, enforce test floor and no skipped tests. Native adapter fixture tests
+pass; actual non-Linux and OBS33 hosted builds pending. No release or merge.
+
+## Native Qt SDK compatibility follow-up
+PR #2 run 45906445233 (and dispatch 45906027914) passed both real Linux
+OBS32/33 builds/tests/packages, failed all six native Windows/macOS legs
+at plugin CMake configure: pinned OBS Qt lacks Qt6TestConfig.cmake.
+Local RED with CMAKE_DISABLE_FIND_PACKAGE_Qt6Test=TRUE reproduced the
+failure. Removed unused QtTest includes/links; replaced only the two
+actual uses with normal Qt mouse events and a precise timer/event loop.
+No assertion or test removed. GREEN full local Release build with
+QtTest disabled, headless 18/18 CTests, row/motion also pass on minimal.
+Hosted native qualification pending. No OBS install, merge or release.
+
+## Intel macOS and native download follow-up
+Run 45907364027: 5/8 platform legs passed, both Intel macOS compiled then
+portable-source-test segfaulted (17/18); Windows33 source download timed
+out. Fixed definite dangling QJsonValueRef from temporary nested object
+in portable-source.hpp; RED ownership static_assert, GREEN by-value
+lookup, expanded round-trip and malformed coordinate coverage. Linux
+ASan did not reproduce crash; hosted Intel confirmation pending. Added
+bounded native download retries with temporary verified publication and
+immediate checksum failure. RED timeout/corrupt-file tests, GREEN 4/4
+adapter tests and 18/18 headless local Release CTests. No merge/release.

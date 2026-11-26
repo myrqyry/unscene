@@ -36,9 +36,10 @@ switching scenes. No Aftermarket dependency.
 
 ## Build and install
 
-Requires a C++17 compiler, CMake 3.21+, Qt 6 Widgets/Test/Svg development
+Requires a C++17 compiler, CMake 3.21+, Qt 6 Widgets/Svg development
 packages, and libobs plus obs-frontend-api development packages matching the
-target OBS version. The verified target is OBS 32.2.0.
+target OBS version. The locally runtime-tested target is OBS 32.2.0 on Linux.
+Linux tests require Xvfb and xauth for isolated libobs startup.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -54,11 +55,18 @@ Restart OBS and enable **Docks → Unscene**. You can leave the original docks o
 or hide them yourself. To uninstall, close OBS and remove only the installed
 Unscene plugin directory; appearance/navigation settings are separate.
 
-The [CI workflow](.github/workflows/ci.yml) uses a pinned Linux OBS 32.2.0 SDK,
-runs the regression suite and checks the test and source archives. CI artifacts
-are preview/test packages, not automatically published releases. To install
-from a Linux test archive, extract it into the Unscene plugin directory above,
-preserving `bin/64bit/unscene.so` and the `LICENSE` at the archive root.
+The [CI workflow](.github/workflows/ci.yml) targets Linux x86-64,
+Windows x64, and macOS Intel/Apple Silicon against pinned OBS 32.2.0 and
+33.0.3 SDKs. Each job requires at least 18 native tests before packaging.
+Hosted qualification of the expanded matrix is pending. See [CI details](docs/ci.md).
+
+CI artifacts are preview/test packages, not automatically published releases.
+OBS 32 Linux retains the original archive layout: extract into the Unscene
+plugin directory above. OBS 32 Windows has an enclosing unscene folder with
+bin/64bit/unscene.dll. OBS 33 Linux/Windows use a plugin directory with the
+module at its root. macOS artifacts contain an unscene.plugin bundle; ad-hoc
+signing is not notarization. Match the artifact to the actual OBS version and
+architecture; successful compilation does not establish native runtime support.
 
 ## Important limitations
 

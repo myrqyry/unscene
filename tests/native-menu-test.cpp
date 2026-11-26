@@ -2,7 +2,6 @@
 #include <QApplication>
 #include <QStandardItemModel>
 #include <QListView>
-#include <QTest>
 #define CHECK(x) do{if(!(x)){qCritical("failed: %s",#x);return 1;}}while(false)
 int main(int argc,char**argv){
  QApplication app(argc,argv);
