@@ -21,6 +21,7 @@
 #include "item-copy.hpp"
 #include "native-menu.hpp"
 #include "item-menu.hpp"
+#include "item-state.hpp"
 #include "inspector.hpp"
 #include "filter-undo.hpp"
 #include "portable-filter.hpp"
@@ -129,6 +130,14 @@ template<class F> bool withItem(const QString&parent,int64_t id,const QString&ui
  auto*scene=obs_scene_from_source(p.get());if(!scene)scene=obs_group_from_source(p.get());if(!scene)return false;
  auto*i=obs_scene_find_sceneitem_by_id(scene,id);if(!i||uuid(obs_sceneitem_get_source(i))!=uid)return false;
  obs_sceneitem_addref(i);fn(i);obs_sceneitem_release(i);return true;
+}
+void restoreItemState(const char*data){
+ auto u=ItemStateUndo::decode(data);if(!u||u->collection!=currentCollection())return;
+ bool changed=false;
+ withItem(u->parent,u->id,u->source,[&](auto*i){
+  if(readItemState(i,u->field)==u->expected)changed=writeItemState(i,u->field,u->next);
+ });
+ if(changed)obs_frontend_save();
 }
 QByteArray transformUndoData(const Node&n,const QString&collection,const TransformState&t){
  return QJsonDocument(QJsonObject{{"collection",collection},{"parent",n.parent},{"id",QString::number(n.id)},{"source",n.uid},{"transform",QString::fromUtf8(t.encode())}}).toJson(QJsonDocument::Compact);
@@ -469,8 +478,9 @@ class Dock : public QWidget {
   if(!explicitOpen&&(!inspected||inspector->pinned()||inspector->dirty()))return;
   if(inspected&&inspected->key==n.key){if(explicitOpen)inspector->show();return;}
   if(inspected&&inspector->dirty()&&!canDiscardDraft())return;
+  const bool wasOpen=inspector->isVisible();
   inspected=n;inspectorCollection=collection;loadInspector();
-  if(inspected){inspector->show();splitter->setSizes({qMax(150,height()/2),qMax(260,height()/2)});}
+  if(inspected){inspector->show();if(!wasOpen)splitter->setSizes({qMax(150,height()/2),qMax(260,height()/2)});}
  }
  void applyInspector(){
   if(!inspected||!sameCollection(inspectorCollection))return;
@@ -555,6 +565,20 @@ class Dock : public QWidget {
   auto p=source(from.parent);auto before=currentOrder(p?ownerScene(p.get()):nullptr);
   auto after=moveRelative(before,nodeOrderKey(from),nodeOrderKey(target->first),target->second);
   if(after)applySiblingOrder(from,expected,before,*after);
+ }
+ void changeItemState(const Node&n,const QString&expected,const QString&field,int value=-1){
+  if(stopping||n.scene||!sameCollection(expected))return;
+  withItem(n.parent,n.id,n.uid,[&](auto*i){
+   int before=readItemState(i,field);if(before<0)return;
+   int after=value<0?(before==0?1:0):value;
+   if(before==after||!writeItemState(i,field,after))return;
+   ItemStateUndo undo{expected,n.parent,n.uid,field,n.id,after,before},redo{expected,n.parent,n.uid,field,n.id,before,after};
+   auto a=undo.encode(),b=redo.encode();
+   QString label=field=="visibility"?(after?"show":"hide"):field=="locked"?(after?"lock":"unlock"):field=="scale"?"scale filtering":field=="blend"?"blending mode":"blending method";
+   auto title=("Unscene: "+label+" "+n.title).toUtf8();
+   obs_frontend_add_undo_redo_action(title.constData(),restoreItemState,restoreItemState,a.constData(),b.constData(),false);
+   changedScene(n.key);
+  });
  }
  void moveItem(const Node&n,int movement){
   if(n.scene||n.locked||!sameCollection(collection))return;
@@ -876,30 +900,35 @@ class Dock : public QWidget {
    return;
   }
   if(flags&OBS_SOURCE_INTERACTION)addSourceAction(&menu,"Interact",[](auto*s){obs_frontend_open_source_interaction(s);});
-  auto mutate=[this,n,expected](std::function<void(obs_sceneitem_t*)>fn){
-   if(!sameCollection(expected))return;
-   itemAction(n,[this,n,fn](auto*i){fn(i);changedScene(n.key);});
-  };
   itemAction(n,[&](auto*i){
-   auto itemToggle=[&](const QString&label,bool checked,std::function<void(obs_sceneitem_t*)>fn){
-    auto*a=menu.addAction(label);a->setCheckable(true);a->setChecked(checked);connect(a,&QAction::triggered,this,[mutate,fn]{mutate(fn);});
+   auto itemToggle=[&](const QString&label,bool checked,const QString&field){
+    auto*a=menu.addAction(label);a->setCheckable(true);a->setChecked(checked);
+    connect(a,&QAction::triggered,this,[this,n,expected,field]{changeItemState(n,expected,field);});
    };
    menu.addSeparator();
-   itemToggle("Visible",obs_sceneitem_visible(i),[](auto*x){obs_sceneitem_set_visible(x,!obs_sceneitem_visible(x));});
-   itemToggle("Locked",obs_sceneitem_locked(i),[](auto*x){obs_sceneitem_set_locked(x,!obs_sceneitem_locked(x));});
+   itemToggle("Visible",obs_sceneitem_visible(i),"visibility");
+   itemToggle("Locked",obs_sceneitem_locked(i),"locked");
    auto*order=menu.addMenu("Order");
    for(auto c:QVector<MenuChoice>{{"Move up",OBS_ORDER_MOVE_UP},{"Move down",OBS_ORDER_MOVE_DOWN},{"Move to top",OBS_ORDER_MOVE_TOP},{"Move to bottom",OBS_ORDER_MOVE_BOTTOM}}){
     auto*a=order->addAction(c.label);a->setEnabled(!obs_sceneitem_locked(i));connect(a,&QAction::triggered,this,[this,n,expected,c]{if(sameCollection(expected))moveItem(n,c.value);});
    }
    if(!(flags&OBS_SOURCE_VIDEO))return;
-   choiceMenu(&menu,"Scale filtering",scaleChoices(),obs_sceneitem_get_scale_filter(i),[mutate](int v){mutate([v](auto*x){obs_sceneitem_set_scale_filter(x,static_cast<obs_scale_type>(v));});});
-   choiceMenu(&menu,"Blending mode",blendChoices(),obs_sceneitem_get_blending_mode(i),[mutate](int v){mutate([v](auto*x){obs_sceneitem_set_blending_mode(x,static_cast<obs_blending_type>(v));});});
-   choiceMenu(&menu,"Blending method",blendMethodChoices(),obs_sceneitem_get_blending_method(i),[mutate](int v){mutate([v](auto*x){obs_sceneitem_set_blending_method(x,static_cast<obs_blending_method>(v));});});
+   choiceMenu(&menu,"Scale filtering",scaleChoices(),obs_sceneitem_get_scale_filter(i),[this,n,expected](int v){changeItemState(n,expected,"scale",v);});
+   choiceMenu(&menu,"Blending mode",blendChoices(),obs_sceneitem_get_blending_mode(i),[this,n,expected](int v){changeItemState(n,expected,"blend",v);});
+   choiceMenu(&menu,"Blending method",blendMethodChoices(),obs_sceneitem_get_blending_method(i),[this,n,expected](int v){changeItemState(n,expected,"blend-method",v);});
    auto*transform=menu.addMenu("Transform");
    auto*reset=transform->addAction("Reset transform…");reset->setEnabled(!obs_sceneitem_locked(i));
-   connect(reset,&QAction::triggered,this,[this,mutate]{
-    if(QMessageBox::question(this,"Reset transform","Reset position, scale, rotation, bounds and crop? This action is not in OBS Undo.",QMessageBox::Yes|QMessageBox::Cancel,QMessageBox::Cancel)!=QMessageBox::Yes)return;
-    mutate([](auto*x){if(obs_sceneitem_locked(x))return;auto t=resetTransform();obs_sceneitem_crop crop{};obs_sceneitem_defer_update_begin(x);obs_sceneitem_set_info2(x,&t);obs_sceneitem_set_crop(x,&crop);obs_sceneitem_defer_update_end(x);});
+   connect(reset,&QAction::triggered,this,[this,n,expected]{
+    if(QMessageBox::question(this,"Reset transform","Reset position, scale, rotation, bounds and crop?",QMessageBox::Yes|QMessageBox::Cancel,QMessageBox::Cancel)!=QMessageBox::Yes)return;
+    if(!sameCollection(expected))return;
+    withItem(n.parent,n.id,n.uid,[&](auto*x){
+     if(obs_sceneitem_locked(x))return;
+     auto old=TransformState::read(x);TransformState next;next.info=resetTransform();next.apply(x);auto actual=TransformState::read(x);
+     if(old.encode()==actual.encode())return;
+     auto a=transformUndoData(n,expected,old),b=transformUndoData(n,expected,actual),title=("Unscene: reset transform "+n.title).toUtf8();
+     obs_frontend_add_undo_redo_action(title.constData(),restoreInspectorTransform,restoreInspectorTransform,a.constData(),b.constData(),false);
+     changedScene(n.key);
+    });
    });
   });
  }
@@ -1080,9 +1109,9 @@ class Dock : public QWidget {
    }else{
     r->addHover("Properties","properties",[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_properties(s.get());});
     r->addHover("Filters","filters",[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_filters(s.get());});
-    r->addHover(n.visible?"Hide source":"Show source",n.visible?"eye":"eye-off",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_visible(i,!obs_sceneitem_visible(i));});},!n.visible);
+    r->addHover(n.visible?"Hide source":"Show source",n.visible?"eye":"eye-off",[this,n]{changeItemState(n,collection,"visibility");},!n.visible);
     r->addSecondary("Inspector","inspector",[this,n]{inspect(n,true);});
-    r->addSecondary(n.locked?"Unlock source":"Lock source",n.locked?"lock":"unlock",[this,n]{itemAction(n,[](auto*i){obs_sceneitem_set_locked(i,!obs_sceneitem_locked(i));});});
+    r->addSecondary(n.locked?"Unlock source":"Lock source",n.locked?"lock":"unlock",[this,n]{changeItemState(n,collection,"locked");});
     r->addSecondary("Move up","up",[this,n]{moveItem(n,OBS_ORDER_MOVE_UP);});
     r->addSecondary("Move down","down",[this,n]{moveItem(n,OBS_ORDER_MOVE_DOWN);});
     r->addSecondary("More actions","more",[this,n]{queueContext(n);});
