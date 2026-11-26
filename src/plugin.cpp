@@ -24,6 +24,7 @@
 #include "inspector.hpp"
 #include "filter-undo.hpp"
 #include "portable-filter.hpp"
+#include "portable-source.hpp"
 #include <QClipboard>
 #include <QFileDialog>
 #include <QSaveFile>
@@ -218,6 +219,56 @@ bool applyOrder(obs_scene_t*scene,const QStringList&expected,const QStringList&n
 void restoreOrder(const char*data){
  auto u=OrderUndo::decode(data);if(!u||u->collection!=currentCollection())return;
  auto p=source(u->parent);if(p&&!obs_source_removed(p.get())&&applyOrder(ownerScene(p.get()),u->expected,u->next))obs_frontend_save();
+}
+QString portableType(const QJsonObject&o){auto v=o["versioned_id"].toString();return v.isEmpty()?o["id"].toString():v;}
+QString portableSourceError(const QJsonObject&o){
+ const char*id=nullptr;auto type=portableType(o);bool installed=false;
+ for(size_t i=0;obs_enum_input_types(i,&id);++i)if(type==QString::fromUtf8(id)){installed=true;break;}
+ if(!installed)return "Missing input type: "+type;
+ auto flags=obs_get_source_output_flags(type.toUtf8().constData());
+ if(flags&(OBS_SOURCE_DO_NOT_DUPLICATE|OBS_SOURCE_CAP_DISABLED))return "Input type cannot be independently duplicated: "+type;
+ QSet<QString> filters;
+ for(size_t i=0;obs_enum_filter_types(i,&id);++i)filters.insert(QString::fromUtf8(id));
+ for(auto v:o["filters"].toArray()){
+  auto f=v.toObject();auto ft=portableType(f);
+  if(!filters.contains(ft)||!filterCompatible(flags,obs_get_source_output_flags(ft.toUtf8().constData())))return "Missing or incompatible filter: "+ft;
+ }
+ return {};
+}
+QJsonObject savePortableSource(obs_source_t*s){
+ std::unique_ptr<obs_data_t,decltype(&obs_data_release)> data(obs_save_source(s),obs_data_release);
+ return data?QJsonDocument::fromJson(obs_data_get_json(data.get())).object():QJsonObject();
+}
+Source loadPortableSource(const QJsonObject&o){
+ if(!portableSourceError(o).isEmpty())return Source(nullptr,obs_source_release);
+ auto json=QJsonDocument(o).toJson(QJsonDocument::Compact);
+ std::unique_ptr<obs_data_t,decltype(&obs_data_release)> data(obs_data_create_from_json(json.constData()),obs_data_release);
+ Source input(data?obs_load_source(data.get()):nullptr,obs_source_release);
+ if(!input||uuid(input.get())!=o["uuid"].toString()||obs_source_get_type(input.get())!=OBS_SOURCE_TYPE_INPUT||filterCount(input.get())!=o["filters"].toArray().size())return Source(nullptr,obs_source_release);
+ obs_source_load2(input.get());return input;
+}
+void restorePortableItem(const char*data){
+ auto o=QJsonDocument::fromJson(data).object();
+ if(o["collection"].toString()!=currentCollection())return;
+ auto parent=source(o["parent"].toString());auto*scene=parent?ownerScene(parent.get()):nullptr;
+ bool ok=false;auto id=o["item"].toString().toLongLong(&ok);
+ auto payload=decodePortableSource(o["payload"].toString().toUtf8());
+ if(!scene||!ok||id<=0||!payload)return;
+ auto uid=payload->source["uuid"].toString();if(uid.isEmpty())return;
+ auto*i=obs_scene_find_sceneitem_by_id(scene,id);
+ if(o["remove"].toBool()){
+  if(!i||uuid(obs_sceneitem_get_source(i))!=uid)return;
+  obs_sceneitem_remove(i);obs_frontend_save();return;
+ }
+ if(i)return;
+ auto input=source(uid);
+ if(input){if(obs_source_removed(input.get())||QString::fromUtf8(obs_source_get_id(input.get()))!=portableType(payload->source))return;}
+ else{
+  Source collision(obs_get_source_by_name(payload->source["name"].toString().toUtf8().constData()),obs_source_release);
+  if(collision)return;
+  input=loadPortableSource(payload->source);
+ }
+ if(input)if(auto*newItem=payload->item.paste(scene,input.get())){obs_sceneitem_set_id(newItem,id);obs_frontend_save();}
 }
 class Dock : public QWidget {
  QListView *nativeList; QVBoxLayout *rows; QVBoxLayout *dockLayout; QToolBar*bar; QScrollArea *scroll; QWidget *body; QTimer timer;
@@ -653,6 +704,69 @@ class Dock : public QWidget {
   if(!copied->paste(scene,input.get())){QMessageBox::warning(this,"Unscene","Could not paste the source into this scene.");return;}
   revealScene(n);
  }
+ void transferSource(const Node&n,const QString&expected,bool file,bool importing){
+  if(stopping||editingAppearance||!sameCollection(expected))return;
+  QScopedValueRollback<bool> guard(editingAppearance,true);
+  if(!importing){
+   QByteArray bytes;bool transitions=false;
+   withItem(n.parent,n.id,n.uid,[&](auto*i){
+    auto item=ItemCopy::capture(i);if(!item)return;
+    transitions=obs_sceneitem_get_transition(i,true)||obs_sceneitem_get_transition(i,false);
+    if(!transitions)bytes=encodePortableSource(savePortableSource(obs_sceneitem_get_source(i)),*item);
+   });
+   if(!decodePortableSource(bytes)){QMessageBox::warning(this,"Unscene",transitions?"Show/hide transition transfers are not supported yet.":"This source could not be serialized.");return;}
+   if(QMessageBox::question(this,"Share source settings","Source settings may contain private paths, URLs or credentials. Only share with trusted recipients. Continue?",QMessageBox::Yes|QMessageBox::Cancel,QMessageBox::Cancel)!=QMessageBox::Yes)return;
+   if(!file){QGuiApplication::clipboard()->setText(QString::fromUtf8(bytes));return;}
+   auto path=QFileDialog::getSaveFileName(this,"Export source","source.json","JSON files (*.json)");
+   if(path.isEmpty())return;QSaveFile out(path);
+   if(!out.open(QIODevice::WriteOnly)||out.write(bytes)!=bytes.size()||!out.commit())QMessageBox::warning(this,"Unscene","Could not export source.");
+   return;
+  }
+  if(!n.scene)return;
+  QByteArray bytes;
+  if(!file)bytes=QGuiApplication::clipboard()->text().toUtf8();
+  else{
+   auto path=QFileDialog::getOpenFileName(this,"Import source",QString(),"JSON files (*.json)");if(path.isEmpty())return;
+   QFile f(path);if(!f.open(QIODevice::ReadOnly)||f.size()>PortableFilterMaxBytes){QMessageBox::warning(this,"Unscene","Could not read source file or it exceeds 8 MiB.");return;}
+   bytes=f.read(PortableFilterMaxBytes+1);
+  }
+  auto payload=decodePortableSource(bytes);
+  if(!payload){QMessageBox::warning(this,"Unscene","Invalid or unsupported source JSON. Nested scenes, groups and show/hide transitions are not supported yet.");return;}
+  auto error=portableSourceError(payload->source);
+  if(!error.isEmpty()){QMessageBox::warning(this,"Unscene",error);return;}
+  auto base=payload->source["name"].toString().trimmed(),name=base;
+  for(int i=2;;++i){Source used(obs_get_source_by_name(name.toUtf8().constData()),obs_source_release);if(!used)break;name=base+" "+QString::number(i);}
+  QMessageBox confirm(QMessageBox::Question,"Import source","Create a new independent source? Only import settings you trust.",QMessageBox::Yes|QMessageBox::Cancel,this);
+  confirm.setTextFormat(Qt::PlainText);confirm.setInformativeText(QString("%1 → %2 (%3 filter(s)). External files are not included; hotkey bindings are not copied.").arg(name,n.title).arg(payload->source["filters"].toArray().size()));confirm.setDefaultButton(QMessageBox::Cancel);
+  if(confirm.exec()!=QMessageBox::Yes||!sameCollection(expected))return;
+  auto parent=source(n.uid);auto*scene=parent?obs_scene_from_source(parent.get()):nullptr;
+  Source collision(obs_get_source_by_name(name.toUtf8().constData()),obs_source_release);
+  if(!scene||collision){QMessageBox::warning(this,"Unscene","Destination or source name changed; retry import.");return;}
+  auto prepared=preparePortableSource(payload->source,name);
+  auto input=loadPortableSource(prepared);
+  if(!input){QMessageBox::warning(this,"Unscene","Could not load the source and its filters.");return;}
+  auto*i=payload->item.paste(scene,input.get());
+  if(!i){QMessageBox::warning(this,"Unscene","Could not insert source.");return;}
+  auto actual=ItemCopy::capture(i);
+  if(actual){
+   auto snapshot=encodePortableSource(savePortableSource(input.get()),*actual);
+   if(decodePortableSource(snapshot)){
+    QJsonObject undo{{"collection",expected},{"parent",n.uid},{"item",QString::number(obs_sceneitem_get_id(i))},{"payload",QString::fromUtf8(snapshot)},{"remove",true}};
+    auto redo=undo;redo["remove"]=false;
+    auto a=QJsonDocument(undo).toJson(QJsonDocument::Compact),b=QJsonDocument(redo).toJson(QJsonDocument::Compact);
+    auto title=("Unscene: import "+name).toUtf8();
+    obs_frontend_add_undo_redo_action(title.constData(),restorePortableItem,restorePortableItem,a.constData(),b.constData(),false);
+   }
+  }
+  revealScene(n);
+ }
+ void portableMenu(QMenu&menu,const Node&n,const QString&expected,bool importing){
+  auto*sub=menu.addMenu("Portable source");
+  for(bool file:{false,true}){
+   auto*a=sub->addAction(importing?(file?"Import JSON…":"Paste from clipboard…"):(file?"Export JSON…":"Copy to clipboard…"));
+   connect(a,&QAction::triggered,this,[this,n,expected,file,importing]{QTimer::singleShot(0,this,[this,n,expected,file,importing]{transferSource(n,expected,file,importing);});});
+  }
+ }
  void removeItem(const Node&n){
   if(n.scene||n.group||editingAppearance||stopping)return;
   const auto expected=collection;
@@ -819,6 +933,7 @@ class Dock : public QWidget {
    auto*add=menu.addAction("Add source…");connect(add,&QAction::triggered,this,[this,n]{QTimer::singleShot(0,this,[this,n]{addSource(n);});});
    auto*ref=menu.addAction("Paste (reference)");ref->setEnabled(canPaste(false));
    connect(ref,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))QTimer::singleShot(0,this,[this,n,expected]{if(sameCollection(expected))pasteSource(n,false);});});
+   portableMenu(menu,n,expected,true);
    auto*dup=menu.addAction("Paste (duplicate)");dup->setEnabled(canPaste(true));
    connect(dup,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))QTimer::singleShot(0,this,[this,n,expected]{if(sameCollection(expected))pasteSource(n,true);});});
   }else{
@@ -829,6 +944,7 @@ class Dock : public QWidget {
    if(!n.group){
     menu.addSeparator();
     auto*copy=menu.addAction("Copy source");auto input=source(n.uid);copy->setEnabled(input&&!obs_source_is_scene(input.get()));connect(copy,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))itemAction(n,[this](auto*i){copied=ItemCopy::capture(i);if(copied)obs_frontend_copy_sceneitem(i);});});
+    if(input&&!obs_source_is_scene(input.get()))portableMenu(menu,n,expected,false);
     auto*remove=menu.addAction("Remove from scene…");connect(remove,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))QTimer::singleShot(0,this,[this,n]{removeItem(n);});});
    }
   }
