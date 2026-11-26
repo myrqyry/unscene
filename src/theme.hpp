@@ -1,6 +1,7 @@
 #pragma once
 #include <QToolButton>
 #include <QPainter>
+#include <QPainterPath>
 #include <QSvgRenderer>
 #include <QHash>
 #include <QStyleOptionToolButton>
@@ -70,7 +71,7 @@ class GlyphButton:public QToolButton{
  QVariantAnimation hoverMotion,angleMotion,alphaMotion;
  qreal hover=0,angle=0,alpha=1;
  int duration=0;
- bool actionWanted=true;
+ bool actionWanted=true,circular=false;
  void animate(QVariantAnimation&a,qreal from,qreal to){
   a.stop();a.setStartValue(from);a.setEndValue(to);a.setDuration(qMax(1,duration));a.start();
  }
@@ -98,6 +99,7 @@ public:
   animate(alphaMotion,alpha,showAction?1:0);
  }
  void spin(){if(!duration)return;angleMotion.stop();angle=0;animate(angleMotion,0,360);}
+ void setCircular(bool value){if(circular!=value){circular=value;updateGeometry();update();}}
  void setGlyph(const QString&id){if(glyph!=id){glyph=id;update();}}
  QSize themedIconSize()const{
   int side=style()->pixelMetric(QStyle::PM_ToolBarIconSize,nullptr,this);
@@ -107,7 +109,8 @@ public:
  QSize sizeHint()const override{
   const_cast<GlyphButton*>(this)->ensurePolished();
   QStyleOptionToolButton opt;initStyleOption(&opt);opt.iconSize=themedIconSize();
-  return style()->sizeFromContents(QStyle::CT_ToolButton,&opt,opt.iconSize,this).expandedTo(opt.iconSize);
+  auto size=style()->sizeFromContents(QStyle::CT_ToolButton,&opt,opt.iconSize,this).expandedTo(opt.iconSize);
+  if(circular){int side=qMax(size.width(),size.height());return {side,side};}return size;
  }
  QSize minimumSizeHint()const override{return sizeHint();}
 protected:
@@ -116,6 +119,7 @@ protected:
  void leaveEvent(QEvent*e)override{if(duration)animate(hoverMotion,hover,0);else{hover=0;update();}QToolButton::leaveEvent(e);}
  void paintEvent(QPaintEvent*)override{
   QPainter p(this);p.setRenderHint(QPainter::Antialiasing);p.setOpacity(alpha);
+  if(circular){QPainterPath clip;const qreal side=qMin(width(),height());clip.addEllipse(QRectF((width()-side)/2,(height()-side)/2,side,side));p.setClipPath(clip);}
   QStyleOptionToolButton opt;initStyleOption(&opt);opt.iconSize=themedIconSize();
   const auto fg=palette().color(isEnabled()?QPalette::Active:QPalette::Disabled,QPalette::ButtonText);
   const int size=opt.iconSize.width();

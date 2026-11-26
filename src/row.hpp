@@ -16,6 +16,7 @@
 #include <QApplication>
 #include <functional>
 #include "theme.hpp"
+#include "scene-palette.hpp"
 #include "motion.hpp"
 
 class ElidedLabel:public QLabel{
@@ -47,35 +48,44 @@ public:
  std::function<void()> onDragCancel;
  void cancelGesture(){pressed=dragging=false;}
  void setDropIndicator(int edge){if(dropEdge!=edge){dropEdge=edge;update();}}
- void setAccent(const QColor &color){accentColor=color;update();}
+ void setAccent(const QColor &color){if(accentColor!=color){accentColor=color;refreshRoles();applyInk();update();}}
  QColor accent()const{return accentColor;}
+ void setBranchColor(const QColor&color,bool first,bool last){
+  if(branchColor==color&&branchFirst==first&&branchLast==last&&branchEnabled)return;
+  branchColor=color;branchFirst=first;branchLast=last;branchEnabled=true;refreshRoles();applyInk();update();
+ }
  Row(const QString &title,bool scene,bool open,int depth,QWidget *parent=nullptr):QWidget(parent),isScene(scene),nestDepth(depth){
   setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Fixed);setAttribute(Qt::WA_Hover);
   rowHover.setEasingCurve(QEasingCurve::OutCubic);
   connect(&rowHover,&QVariantAnimation::valueChanged,this,[this](const QVariant&v){hoverAmount=v.toReal();update();});
   auto *outer=new QVBoxLayout(this);outer->setContentsMargins(0,0,0,0);
   top=new QWidget(this);first=new QHBoxLayout(top);first->setContentsMargins(0,0,0,0);outer->addWidget(top);
-  disclosure=new GlyphButton("right",top);disclosure->setFocusPolicy(Qt::NoFocus);
+  disclosure=new GlyphButton("right",top);disclosure->setFocusPolicy(Qt::NoFocus);disclosure->setCircular(true);
   connect(disclosure,&QToolButton::clicked,this,[this]{if(onBody)onBody();});first->addWidget(disclosure);disclosure->hide();
   thumb=new QLabel(top);thumb->setFixedSize(scene?48:36,scene?27:22);thumb->setAlignment(Qt::AlignCenter);first->addWidget(thumb);
   name=new ElidedLabel(title,top);if(scene){auto f=name->font();f.setWeight(QFont::DemiBold);name->setFont(f);}first->addWidget(name,1);
   name->installEventFilter(this);thumb->installEventFilter(this);top->installEventFilter(this);
   status=new ElidedLabel("",top);status->hide();first->addWidget(status);status->setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Preferred);
   secondary=new QWidget(this);extra=new QHBoxLayout(secondary);extra->setContentsMargins(0,0,0,0);extra->addStretch();secondaryReveal=new Reveal(secondary,this);outer->addWidget(secondaryReveal);
-  applyGeometry();setExpanded(open);
+  applyGeometry();refreshRoles();setExpanded(open);
  }
  void setDisclosure(bool enabled,bool open){disclosure->setVisible(enabled);disclosure->setAngle(open?90:0);disclosure->setToolTip(open?"Collapse":"Expand");}
  void setSelected(bool value){selected=value;applyInk();update();}
- void setNativeList(QListView *v){if(nativeList!=v){nativeList=v;applyGeometry();update();}}
+ void setNativeList(QListView *v){if(nativeList!=v){nativeList=v;applyGeometry();refreshRoles();applyInk();update();}}
  void setStatus(const QString&s){status->setFullText(s);auto f=name->font();f.setWeight(QFont::Normal);if(f.pointSizeF()>2)f.setPointSizeF(f.pointSizeF()*.82);status->setFont(f);status->setFixedWidth(status->fontMetrics().horizontalAdvance(s)+2*themeSpacing(this,Qt::Horizontal));status->setVisible(!s.isEmpty());status->setToolTip(s);}
- QColor inkColor()const{return palette().color(selected?QPalette::HighlightedText:QPalette::WindowText);}
+ QColor inkColor()const{
+  if(selected)return palette().color(QPalette::HighlightedText);
+  if(isScene&&accentColor.isValid())return roles.onHeader;
+  if(!isScene&&branchEnabled)return roles.onContainer;
+  return palette().color(QPalette::WindowText);
+ }
  void setMotionDuration(int ms){duration=ms;if(!ms){rowHover.stop();hoverAmount=underMouse()?1:0;update();}if(!ms){secondaryReveal->finish();}for(auto*b:hoverButtons)static_cast<GlyphButton*>(b)->setMotionDuration(ms);for(auto*b:secondaryButtons)static_cast<GlyphButton*>(b)->setMotionDuration(ms);disclosure->setMotionDuration(ms);}
  bool motionActive()const{return secondaryReveal->moving();}
  void setExpanded(bool value){opened=value;secondaryReveal->setOpen(value&&!isScene,duration);}
  void settleMotion(){secondaryReveal->finish();}
  bool expanded()const{return opened;}
  void addHover(const QString &tip,const QString&icon,std::function<void()> action,bool always=false){
-  auto *b=makeButton(tip,icon,std::move(action));first->addWidget(b);hoverButtons.append(b);
+  auto *b=makeButton(tip,icon,std::move(action));if(icon=="arrow-right"||icon=="plus")static_cast<GlyphButton*>(b)->setCircular(true);first->addWidget(b);hoverButtons.append(b);
   b->setProperty("always",always);auto p=b->sizePolicy();p.setRetainSizeWhenHidden(true);b->setSizePolicy(p);static_cast<GlyphButton*>(b)->revealAction(always||underMouse());
  }
  void addSecondary(const QString &tip,const QString&icon,std::function<void()> action){
@@ -84,19 +94,48 @@ public:
 protected:
  void paintEvent(QPaintEvent*event) override{
   QWidget::paintEvent(event);QPainter p(this);p.setRenderHint(QPainter::Antialiasing);
-  const auto surface=rect();
-  if(parentWidget()&&parentWidget()->property("unsceneReordering").toBool())
-   p.fillRect(surface,nativeList?nativeList->palette().brush(QPalette::Base):palette().brush(QPalette::Window));
-  if(selected||hoverAmount>0){
-   p.save();if(!selected)p.setOpacity(hoverAmount);
+  const auto h=themeSpacing(this,Qt::Horizontal),v=themeSpacing(this,Qt::Vertical);
+  const qreal radius=qBound(3,h+v/2,12);
+  const QRectF surface=QRectF(rect()).adjusted(qMax(1,h/2),isScene?2:0,-qMax(1,h/2),isScene?-2:0);
+  const auto pal=nativeList?nativeList->palette():palette();
+  const bool moving=parentWidget()&&parentWidget()->property("unsceneReordering").toBool();
+  // A shared surface extends through the middle rows of a scene branch.
+  // Keep both ends round, without introducing gaps between its sources.
+  QPainterPath branch;
+  branch.addRoundedRect(surface,radius,radius);
+  if(!isScene&&branchEnabled&&!moving){
+   if(!branchFirst)branch.addRect(QRectF(surface.left(),surface.top(),surface.width(),qMin(radius,surface.height())));
+   if(!branchLast)branch.addRect(QRectF(surface.left(),qMax(surface.top(),surface.bottom()-radius),surface.width(),qMin(radius,surface.height())));
+   branch.setFillRule(Qt::WindingFill);
+  }
+  const auto base=pal.color(QPalette::Base);
+  if(moving)p.fillRect(rect(),base);
+  if(!isScene&&branchEnabled){
+   p.fillPath(branch,roles.container);
+  }
+  const QRectF rowSurface=surface.adjusted(1,isScene?0:1,-1,isScene?0:-1);
+  QPainterPath rounded;rounded.addRoundedRect(rowSurface,radius,radius);
+  if(isScene&&accentColor.isValid()&&!selected)
+   p.fillPath(rounded,roles.header);
+  if(selected||(hoverAmount>0&&!branchEnabled&&!accentColor.isValid())){
+   p.save();p.setClipPath(rounded);if(!selected)p.setOpacity(hoverAmount);
    auto*view=nativeList?static_cast<QWidget*>(nativeList.data()):this;
-   QStyleOptionViewItem opt;opt.initFrom(view);opt.rect=surface;opt.state=QStyle::State_Enabled|QStyle::State_Active|(selected?QStyle::State_Selected:QStyle::State_MouseOver);opt.showDecorationSelected=true;
+   QStyleOptionViewItem opt;opt.initFrom(view);opt.rect=rowSurface.toAlignedRect();opt.state=QStyle::State_Enabled|QStyle::State_Active|(selected?QStyle::State_Selected:QStyle::State_MouseOver);opt.showDecorationSelected=true;
    view->style()->drawControl(QStyle::CE_ItemViewItem,&opt,&p,view);
    p.restore();
   }
+  if(!selected&&hoverAmount>0&&(branchEnabled||accentColor.isValid())){
+   auto layer=inkColor();layer.setAlphaF(.08*hoverAmount);p.fillPath(rounded,layer);
+  }
   if(accentColor.isValid()){
-   auto tint=accentColor;tint.setAlpha(selected?22:38);p.setPen(Qt::NoPen);p.setBrush(tint);p.fillRect(surface,tint);
-   p.setBrush(accentColor);p.fillRect(QRect(0,0,qMax(2,themeSpacing(this,Qt::Horizontal)/2),height()),accentColor);
+   // Source accents remain distinct without recoloring the whole scene surface.
+   auto indicatorColor=accentRoles.accent;
+   if(selected)indicatorColor=contrastInk(palette().color(QPalette::Highlight),indicatorColor,3);
+   else if(isScene||branchEnabled)indicatorColor=contrastInk(isScene?roles.header:roles.container,indicatorColor,3);
+   p.setPen(Qt::NoPen);p.setBrush(indicatorColor);
+   const qreal barWidth=qMax(2,h/2);
+   const QRectF indicator(rowSurface.left()+2,rowSurface.top()+4,barWidth,qMax(0.0,rowSurface.height()-8));
+   p.drawRoundedRect(indicator,barWidth/2,barWidth/2);
   }
   if(dropEdge){QPen pen(palette().color(QPalette::Highlight));pen.setWidth(2);p.setPen(pen);int y=dropEdge<0?1:height()-2;p.drawLine(outerLeft(),y,width()-2,y);}
   if(opened&&!isScene){auto divider=inkColor();divider.setAlpha(32);p.setPen(divider);const int y=secondaryReveal->geometry().top()-1;p.drawLine(outerLeft(),y,width()-5,y);}
@@ -104,7 +143,7 @@ protected:
  void contextMenuEvent(QContextMenuEvent*e)override{if(onAppearance){onAppearance();e->accept();}else QWidget::contextMenuEvent(e);}
  void enterEvent(QEnterEvent *e)override{animateHover(1);for(auto*b:hoverButtons)static_cast<GlyphButton*>(b)->revealAction(true);update();QWidget::enterEvent(e);}
  void leaveEvent(QEvent *e)override{animateHover(0);for(auto*b:hoverButtons)static_cast<GlyphButton*>(b)->revealAction(b->property("always").toBool());update();QWidget::leaveEvent(e);}
- void changeEvent(QEvent*e)override{QWidget::changeEvent(e);if(ready&&(e->type()==QEvent::PaletteChange||e->type()==QEvent::StyleChange||e->type()==QEvent::FontChange)){applyGeometry();applyInk();}}
+ void changeEvent(QEvent*e)override{QWidget::changeEvent(e);if(ready&&(e->type()==QEvent::PaletteChange||e->type()==QEvent::StyleChange||e->type()==QEvent::FontChange)){applyGeometry();refreshRoles();applyInk();}}
  bool eventFilter(QObject *o,QEvent *e)override{
   if(e->type()==QEvent::ContextMenu&&onAppearance){onAppearance();return true;}
   if(e->type()==QEvent::MouseButtonPress){
@@ -128,7 +167,9 @@ protected:
  }
 private:
  int dropEdge=0;bool pressed=false,dragging=false;QPoint pressPoint;
- bool isScene,opened=false,selected=false;int nestDepth=0;bool ready=false;QWidget*top=nullptr;QColor accentColor; int duration=0;Reveal*secondaryReveal;
+ bool isScene,opened=false,selected=false;int nestDepth=0;bool ready=false;QWidget*top=nullptr;QColor accentColor,branchColor;bool branchEnabled=false,branchFirst=true,branchLast=true; int duration=0;Reveal*secondaryReveal;
+ SceneSurfaceRoles roles,accentRoles;
+ void refreshRoles(){const auto pal=nativeList?nativeList->palette():palette();roles=sceneSurfaceRoles(pal,isScene?accentColor:branchColor);accentRoles=sceneSurfaceRoles(pal,accentColor);}
  QVariantAnimation rowHover;qreal hoverAmount=0;
  void animateHover(qreal target){rowHover.stop();if(!duration){hoverAmount=target;update();return;}rowHover.setDuration(duration);rowHover.setStartValue(hoverAmount);rowHover.setEndValue(target);rowHover.start();}
  QHBoxLayout *first,*extra;GlyphButton*disclosure;ElidedLabel*status;QPointer<QListView>nativeList;

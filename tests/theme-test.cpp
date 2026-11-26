@@ -41,5 +41,32 @@ int main(int argc,char**argv){
  QListView native;native.setStyleSheet("QListView::item { padding: 9px; min-height: 55px; border: 2px solid transparent; }");
  Row styled("Source",false,false,1);styled.setNativeList(&native);styled.show();app.processEvents();
  CHECK(styled.sizeHint().height()>=55);
+ // Seed-derived tonal roles must adapt to both theme modes.
+ for(auto base:{QColor("#20242a"),QColor("#f3ebe2")}){
+  QPalette palette;palette.setColor(QPalette::Base,base);palette.setColor(QPalette::WindowText,base.lightness()<128?QColor("#e1dce8"):QColor("#57506e"));
+  for(auto seed:{QColor("#ff0044"),QColor("#00ff44"),QColor("#0055ff"),QColor("#ffffff"),QColor("#000000")}){
+   auto roles=sceneSurfaceRoles(palette,seed);
+   CHECK(roles.container!=roles.header);
+   CHECK(surfaceContrast(roles.container,roles.onContainer)>=4.5);
+   CHECK(surfaceContrast(roles.header,roles.onHeader)>=4.5);
+   CHECK(surfaceContrast(roles.container,roles.accent)>=3.0);
+   CHECK(base.lightness()<128?roles.container.lightness()>base.lightness():roles.container.lightness()<base.lightness());
+  }
+ }
+ // Branch surfaces inherit their owning scene, not the source UUID.
+ QWidget canvas;canvas.setStyleSheet("QWidget#branchFixture {background:#20242a;}");canvas.setObjectName("branchFixture");
+ Row branch("Child",false,false,1,&canvas);branch.setPalette(p);branch.setBranchColor(QColor("#e05050"),true,true);
+ branch.resize(260,44);canvas.resize(260,44);canvas.show();app.processEvents();
+ auto red=canvas.grab().toImage();
+ CHECK(red.pixelColor(12,22).red()>red.pixelColor(12,22).blue());
+ CHECK(red.pixelColor(0,0)!=red.pixelColor(12,22));
+ branch.setBranchColor(QColor("#5080e0"),true,true);app.processEvents();
+ auto blue=canvas.grab().toImage();CHECK(blue.pixelColor(12,22).blue()>blue.pixelColor(12,22).red());
+ branch.setBranchColor({},true,true);app.processEvents();CHECK(canvas.grab().toImage().pixelColor(12,22)!=blue.pixelColor(12,22));
+ host.setStyleSheet("QToolButton { icon-size: 24px; padding: 9px; border: 3px solid #2468ac; border-radius: 0px; background: #123456; }");
+ app.processEvents();auto squareBefore=button->grab().toImage();
+ button->setCircular(true);app.processEvents();CHECK(button->sizeHint().width()==button->sizeHint().height());
+ auto circular=button->grab().toImage();
+ CHECK(circular.pixelColor(1,1)!=squareBefore.pixelColor(1,1));
  return 0;
 }

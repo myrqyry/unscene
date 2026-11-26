@@ -1115,7 +1115,9 @@ class Dock : public QWidget {
    while(index<rowOrder.size()&&rowOrder[index]!=key){auto*shell=exits.take(rowOrder[index++]);if(shell)rows->addWidget(shell);}
    if(index<rowOrder.size())++index;
   };
-  for(const auto&n:nodes){
+  QColor sceneColor;
+  for(int nodeIndex=0;nodeIndex<nodes.size();++nodeIndex){
+   const auto&n=nodes[nodeIndex];
    const bool isOpen=searching()||opened.contains(n.key), expanded=selected==n.key;
    auto found=rowEntries.find(n.key);
    bool fresh=found==rowEntries.end(),created=fresh;
@@ -1141,6 +1143,8 @@ class Dock : public QWidget {
    const auto art=appearancePixmap(appearance,artworkPalette(r),r->thumb->size());
    if(!art.isNull()){artworkOverrides.insert(n.uid);r->thumb->setPixmap(art);}
    r->setAccent(appearance.color);
+   if(n.scene)sceneColor=appearance.color;
+   else r->setBranchColor(sceneColor,nodeIndex==0||nodes[nodeIndex-1].scene,nodeIndex+1==nodes.size()||nodes[nodeIndex+1].scene);
    if(fresh){
    r->onAppearance=[this,n]{queueNativeContext(n);};
    r->onBody=[this,n]{toggle(n);};
@@ -1228,7 +1232,7 @@ public:
  void themeGeometry(){
   int h=themeSpacing(this,Qt::Horizontal),v=themeSpacing(this,Qt::Vertical);
   dockLayout->setContentsMargins(qMax(1,h/2),qMax(1,v/2),qMax(1,h/2),qMax(1,v/2));dockLayout->setSpacing(qMax(1,v/2));
-  rows->setSpacing(qMax(0,nativeList->spacing()));search->setMinimumWidth(search->fontMetrics().horizontalAdvance("MMMM"));
+  rows->setSpacing(0);search->setMinimumWidth(search->fontMetrics().horizontalAdvance("MMMM"));
   bar->updateGeometry();
  }
  void themeChanged(){if(drawer->moving())drawer->finish();inspector->finishMotion();themeGeometry();resetRows=true;dirty=true;request();}
