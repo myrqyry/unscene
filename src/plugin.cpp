@@ -11,6 +11,7 @@
 #include <QSignalBlocker>
 #include <QMenu>
 #include <memory>
+#include <vector>
 #include "row.hpp"
 #include "snapshot.hpp"
 #include <QToolBar>
@@ -22,6 +23,10 @@
 #include "item-menu.hpp"
 #include "inspector.hpp"
 #include "filter-undo.hpp"
+#include "portable-filter.hpp"
+#include <QClipboard>
+#include <QFileDialog>
+#include <QSaveFile>
 #include "order.hpp"
 #include <QJsonObject>
 #include <QSplitter>
@@ -258,11 +263,87 @@ class Dock : public QWidget {
   },&c);
   if(c.count)lines<<QString("%1  (%2)").arg(path).arg(c.count);
  }
+ QJsonArray portableFilters(obs_source_t*parent,const QString&id,bool stack){
+  struct C{QString id;bool stack;QJsonArray out;bool failed=false;}c{id,stack};
+  obs_source_enum_filters(parent,[](obs_source_t*,obs_source_t*f,void*p){
+   auto&c=*static_cast<C*>(p);if(!c.stack&&uuid(f)!=c.id)return;
+   std::unique_ptr<obs_data_t,decltype(&obs_data_release)> data(obs_save_source(f),obs_data_release);
+   if(!data){c.failed=true;return;}
+   c.out.append(QJsonDocument::fromJson(obs_data_get_json(data.get())).object());
+  },&c);
+  return c.failed?QJsonArray():c.out;
+ }
+ void transferFilters(const Node&n,const QString&expected,obs_source_t*parent,const QString&action,const QString&id){
+  if(action=="copy"||action=="copy-stack"||action=="export"||action=="export-stack"){
+   auto bytes=encodePortableFilters(portableFilters(parent,id,action.endsWith("-stack")));
+   if(!decodePortableFilters(bytes)){QMessageBox::warning(this,"Unscene","Could not serialize filters or the transfer exceeds its size limit.");return;}
+   if(QMessageBox::question(this,"Share filter settings","Saved filter settings may contain private paths, URLs or credentials. Only share with trusted recipients. Continue?",QMessageBox::Yes|QMessageBox::Cancel,QMessageBox::Cancel)!=QMessageBox::Yes)return;
+   if(action.startsWith("copy")){QGuiApplication::clipboard()->setText(QString::fromUtf8(bytes));return;}
+   auto file=QFileDialog::getSaveFileName(this,"Export filters","filters.json","JSON files (*.json)");
+   if(file.isEmpty())return;
+   QSaveFile out(file);
+   if(!out.open(QIODevice::WriteOnly)||out.write(bytes)!=bytes.size()||!out.commit())QMessageBox::warning(this,"Unscene","Could not save filter file.");
+   return;
+  }
+  QByteArray bytes;
+  if(action=="paste")bytes=QGuiApplication::clipboard()->text().toUtf8();
+  else {
+   auto path=QFileDialog::getOpenFileName(this,"Import filters",QString(),"JSON files (*.json)");
+   if(path.isEmpty())return;QFile f(path);
+   if(!f.open(QIODevice::ReadOnly)||f.size()>PortableFilterMaxBytes){QMessageBox::warning(this,"Unscene","Unable to read filter file or it is too large.");return;}
+   bytes=f.read(PortableFilterMaxBytes+1);
+  }
+  auto parsed=decodePortableFilters(bytes);
+  if(!parsed){QMessageBox::warning(this,"Unscene","Invalid filter data. Use an OBS saved filter or Unscene filter-stack JSON.");return;}
+  auto target=inspectorSource(n,expected);if(!target)return;
+  QSet<QString> installed,names;const char*type=nullptr;
+  for(size_t i=0;obs_enum_filter_types(i,&type);++i)if(type)installed.insert(QString::fromUtf8(type));
+  obs_source_enum_filters(target.get(),[](obs_source_t*,obs_source_t*f,void*p){static_cast<QSet<QString>*>(p)->insert(QString::fromUtf8(obs_source_get_name(f)));},&names);
+  QJsonArray prepared;QStringList labels;
+  for(auto v:*parsed){
+   auto f=v.toObject();auto type=f["versioned_id"].toString(f["id"].toString());
+   if(!installed.contains(type)||!filterCompatible(obs_source_get_output_flags(target.get()),obs_get_source_output_flags(type.toUtf8().constData()))){
+    QMessageBox::warning(this,"Unscene","Missing or incompatible filter type: "+type);return;
+   }
+   f=preparePortableFilter(f,names);prepared.append(f);labels<<f["name"].toString()+" ("+type+")";
+  }
+  QMessageBox confirm(QMessageBox::Question,"Import filters","Append these filters to the shared source? Existing filters will not be replaced. Only import settings you trust.",QMessageBox::Yes|QMessageBox::Cancel,this);
+  confirm.setTextFormat(Qt::PlainText);confirm.setDetailedText(labels.join(QChar(10)));confirm.setInformativeText(QString("%1 filter(s) → %2. Each is individually undoable. Referenced external files are not included.").arg(prepared.size()).arg(n.title));confirm.setDefaultButton(QMessageBox::Cancel);
+  if(confirm.exec()!=QMessageBox::Yes)return;
+  target=inspectorSource(n,expected);if(!target)return;
+  // Validate names again after the modal confirmation.
+  for(auto v:prepared){auto f=v.toObject();Source existing(obs_source_get_filter_by_name(target.get(),f["name"].toString().toUtf8().constData()),obs_source_release);if(existing){QMessageBox::warning(this,"Unscene","Filter names changed; retry import.");return;}}
+  std::vector<Source> added;bool failed=false;
+  for(auto v:prepared){
+   auto f=v.toObject();auto json=QJsonDocument(f).toJson(QJsonDocument::Compact);
+   std::unique_ptr<obs_data_t,decltype(&obs_data_release)> settings(obs_data_create_from_json(json.constData()),obs_data_release);
+   Source created(settings?obs_load_source(settings.get()):nullptr,obs_source_release);
+   if(!created||uuid(created.get())!=f["uuid"].toString()||obs_source_get_type(created.get())!=OBS_SOURCE_TYPE_FILTER){failed=true;break;}
+   obs_source_filter_add(target.get(),created.get());
+   if(obs_source_filter_get_index(target.get(),created.get())<0){failed=true;break;}
+   obs_source_load(created.get());added.push_back(std::move(created));
+  }
+  if(failed){
+   for(auto&f:added)obs_source_filter_remove(target.get(),f.get());
+   QMessageBox::warning(this,"Unscene","Could not load all filters; imported filters were rolled back.");return;
+  }
+  // Save undo snapshots in application order. Each filter was inserted at
+  // internal index zero; redo must replay that same insertion order.
+  for(auto&f:added){
+   auto snap=savedFilter(target.get(),f.get()).toObject();snap["index"]=0;
+   auto fid=uuid(f.get());
+   registerFilterUndo("paste filter "+QString::fromUtf8(obs_source_get_name(f.get())),{expected,n.uid,fid,"absent",QJsonValue::Null},{expected,n.uid,fid,"present",snap});
+  }
+  thumbnails.remove(n.uid);attempted.remove(n.uid);changedScene(n.key);refreshInspectorExtras();
+ }
  void filterAction(const Node&n,const QString&expected,const QString&action,const QString&id){
   if(!inspected||inspected->key!=n.key||!sameCollection(expected))return;
   auto parent=inspectorSource(n,expected);if(!parent)return;
   QScopedValueRollback<bool> guard(editingAppearance,true);
   if(action=="settings"){obs_frontend_open_source_filters(parent.get());return;}
+  if(action=="copy"||action=="copy-stack"||action=="export"||action=="export-stack"||action=="paste"||action=="import"){
+   transferFilters(n,expected,parent.get(),action,id);return;
+  }
   auto record=[&](const QString&label,const QString&fid,const QString&op,QJsonValue before,QJsonValue after){
    registerFilterUndo(label,{expected,n.uid,fid,op,before},{expected,n.uid,fid,op,after});
   };

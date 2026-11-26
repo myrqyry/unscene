@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QSignalBlocker>
 #include <QStyle>
+#include <QMenu>
 #include "theme.hpp"
 #include <functional>
 struct FilterEntry{
@@ -57,7 +58,18 @@ public:
   connect(more,&QToolButton::clicked,this,[this]{if(onAction)onAction("rename",selectedId());});
   auto*settings=new QToolButton(this);settings->setText("Edit…");bar->addWidget(settings);
   connect(settings,&QToolButton::clicked,this,[this]{if(onAction)onAction("settings",selectedId());});
-  l->addLayout(bar);
+  auto*transfer=new QToolButton(this);transfer->setText("Copy / Paste");transfer->setPopupMode(QToolButton::InstantPopup);
+  auto*menu=new QMenu(transfer);transfer->setMenu(menu);
+  auto action=[&](const QString&label,const QString&op,bool selected,bool any){
+   auto*a=menu->addAction(label);
+   connect(menu,&QMenu::aboutToShow,this,[this,a,selected,any]{a->setEnabled((!selected||!selectedId().isEmpty())&&(!any||!entries.isEmpty()));});
+   connect(a,&QAction::triggered,this,[this,op]{if(onAction)onAction(op,selectedId());});
+  };
+  action("Copy filter","copy",true,true);action("Copy filter stack","copy-stack",false,true);
+  action("Paste filters…","paste",false,false);menu->addSeparator();
+  action("Export filter…","export",true,true);action("Export filter stack…","export-stack",false,true);
+  action("Import filters…","import",false,false);
+  l->addLayout(bar);l->addWidget(transfer,0,Qt::AlignRight);
   connect(list,&QListWidget::currentRowChanged,this,[this]{updateButtons();});
   connect(list,&QListWidget::itemChanged,this,[this](auto*i){if(onAction)onAction(i->checkState()==Qt::Checked?"enable":"disable",i->data(Qt::UserRole).toString());});
   updateButtons();

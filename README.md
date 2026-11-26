@@ -37,6 +37,9 @@ Expand a source and click the Inspector button (or More actions → Open inspect
 
 Inspired by [Source Inspector Dock](https://github.com/prgmitchell/source-inspector-dock); this first inspector implementation is independently authored using public OBS APIs.
 
+## Portable filters
+In the Inspector's Filters tab, **Copy / Paste** copies one filter or an entire stack to the system clipboard, or exports/imports JSON. Single-filter transfers use native OBS saved-source JSON (the format used by [Source Copy](https://github.com/exeldro/obs-source-copy)); multi-filter transfers use a versioned Unscene envelope in displayed filter order. Import checks installed filter types and compatibility, previews the names, appends without replacing existing filters, generates fresh UUIDs, and suffixes conflicting names. Pasted filters have individual OBS undo actions. Import uses the original settings and file references; external files, plugin dependencies, and source references inside third-party settings are not bundled or remapped. Share only trusted JSON: source settings may contain private paths, URLs or credentials. Full source/scene serialization and Source Copy scene/item compatibility are not yet implemented. No dependency on the Source Copy plugin.
+
 ## Source ordering
 Drag an unlocked source row by its name or artwork above/below another source in the same scene or group. A theme-colored insertion line shows the drop position. Search disables drag reordering so hidden siblings are not ambiguous. Cross-scene and cross-group drops are rejected; use the existing copy/reference actions for transfers. The expanded-row arrow buttons and Unscene Order menu also use the same native undoable reorder path. Undo/redo validates the exact sibling sequence and collection before restoring the previous order, without switching the live scene.
 
