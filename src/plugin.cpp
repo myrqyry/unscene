@@ -23,6 +23,7 @@
 #include "item-menu.hpp"
 #include "item-state.hpp"
 #include "inspector.hpp"
+#include "inspector-motion.hpp"
 #include "filter-undo.hpp"
 #include "portable-filter.hpp"
 #include "portable-source.hpp"
@@ -284,7 +285,7 @@ void restorePortableItem(const char*data){
 }
 class Dock : public QWidget {
  QListView *nativeList; ReorderLayout *rows; QVBoxLayout *dockLayout; QToolBar*bar; QScrollArea *scroll; QWidget *body; QTimer timer;
- Inspector*inspector; QSplitter*splitter;
+ Inspector*inspector; QSplitter*splitter; InspectorDrawer*drawer;
  std::optional<Node> inspected;
  QString inspectorCollection;
  Source inspectorSource(const Node&n,const QString&expected){
@@ -462,7 +463,7 @@ class Dock : public QWidget {
   }
   thumbnails.remove(n.uid);attempted.remove(n.uid);changedScene(n.key);refreshInspectorExtras();
  }
- void closeInspector(){inspected.reset();inspector->invalidate();inspector->hide();}
+ void closeInspector(bool animate=false){inspected.reset();inspector->finishMotion();inspector->invalidate();drawer->setOpen(false,animate?motionDuration:0);}
  bool canDiscardDraft(){
   return !inspector->dirty()||QMessageBox::question(this,"Unscene","Discard unapplied inspector changes?",QMessageBox::Discard|QMessageBox::Cancel,QMessageBox::Cancel)==QMessageBox::Discard;
  }
@@ -479,11 +480,10 @@ class Dock : public QWidget {
  void inspect(const Node&n,bool explicitOpen){
   if(n.scene||stopping||!sameCollection(collection))return;
   if(!explicitOpen&&(!inspected||inspector->pinned()||inspector->dirty()))return;
-  if(inspected&&inspected->key==n.key){if(explicitOpen)inspector->show();return;}
+  if(inspected&&inspected->key==n.key){if(explicitOpen)drawer->setOpen(true,motionDuration);return;}
   if(inspected&&inspector->dirty()&&!canDiscardDraft())return;
-  const bool wasOpen=inspector->isVisible();
   inspected=n;inspectorCollection=collection;loadInspector();
-  if(inspected){inspector->show();if(!wasOpen)splitter->setSizes({qMax(150,height()/2),qMax(260,height()/2)});}
+  if(inspected)drawer->setOpen(true,motionDuration);
  }
  void applyInspector(){
   if(!inspected||!sameCollection(inspectorCollection))return;
@@ -638,13 +638,13 @@ class Dock : public QWidget {
   retiring.clear();
  }
  bool layoutMoving()const{
-  if(rows->moving())return true;
+  if(rows->moving()||drawer->moving()||inspector->motionActive())return true;
   for(auto shell:retiring)if(shell&&shell->moving())return true;
   for(const auto&e:rowEntries)if(e.shell->moving()||e.row->motionActive())return true;
   return false;
  }
  void setMotion(int ms){
-  motionDuration=ms;navigation.saveMotion(ms);
+  motionDuration=ms;navigation.saveMotion(ms);inspector->setMotionDuration(ms);if(!ms&&drawer->moving())drawer->finish();
   if(!ms){rows->finish();finishRetiring();}
   for(auto&e:rowEntries){e.row->setMotionDuration(ms);if(!ms)e.shell->finish();}
   for(auto*b:toolbar)b->setMotionDuration(ms);
@@ -1211,10 +1211,10 @@ public:
   connect(search,&QLineEdit::textChanged,this,[this](const QString&t){query=t;animateStructure=true;collapse->setEnabled(!searching());expand->setEnabled(!searching());dirty=true;request();});
   scroll=new QScrollArea(this);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);body=new QWidget;rows=new ReorderLayout(body);rows->setContentsMargins(0,0,0,0);rows->setSpacing(1);scroll->setWidget(body);
   splitter=new QSplitter(Qt::Vertical,this);splitter->setChildrenCollapsible(false);splitter->addWidget(scroll);
-  inspector=new Inspector(configPath("transform-presets.ini"),splitter);splitter->addWidget(inspector);inspector->hide();l->addWidget(splitter,1);
+  inspector=new Inspector(configPath("transform-presets.ini"));drawer=new InspectorDrawer(inspector,splitter);splitter->addWidget(drawer);inspector->setMotionDuration(motionDuration);l->addWidget(splitter,1);
   inspector->onUsageRefresh=[this]{refreshInspectorExtras(true);};
   inspector->onFilterAction=[this](QString action,QString id){if(inspected){auto n=*inspected;auto expected=inspectorCollection;QTimer::singleShot(0,this,[this,n,expected,action,id]{filterAction(n,expected,action,id);});}};
-  inspector->onClose=[this]{if(canDiscardDraft())closeInspector();};
+  inspector->onClose=[this]{if(canDiscardDraft())closeInspector(true);};
   inspector->onApply=[this]{applyInspector();};
   inspector->onDiscard=[this]{loadInspector();};
   inspector->onProperties=[this]{if(inspected&&sameCollection(inspectorCollection)){auto s=source(inspected->uid);if(s)obs_frontend_open_source_properties(s.get());}};
@@ -1231,9 +1231,9 @@ public:
   rows->setSpacing(qMax(0,nativeList->spacing()));search->setMinimumWidth(search->fontMetrics().horizontalAdvance("MMMM"));
   bar->updateGeometry();
  }
- void themeChanged(){themeGeometry();resetRows=true;dirty=true;request();}
- void hideEvent(QHideEvent*e)override{clearDrag();rows->finish();QWidget::hideEvent(e);}
- void stop(){stopping=true;clearDrag();rows->finish();timer.stop();}
+ void themeChanged(){if(drawer->moving())drawer->finish();inspector->finishMotion();themeGeometry();resetRows=true;dirty=true;request();}
+ void hideEvent(QHideEvent*e)override{clearDrag();rows->finish();if(drawer->moving())drawer->finish();inspector->finishMotion();QWidget::hideEvent(e);}
+ void stop(){stopping=true;clearDrag();rows->finish();if(drawer->moving())drawer->finish();inspector->finishMotion();timer.stop();}
  void refresh(){
   if(stopping||editingAppearance||!isVisible())return;
   char *raw=obs_frontend_get_current_scene_collection();QString now=QString::fromUtf8(raw?raw:"");bfree(raw);

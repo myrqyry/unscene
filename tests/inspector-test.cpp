@@ -17,6 +17,14 @@ int main(int argc,char**argv){
  CHECK(panel.draft().info.scale.x==-1&&panel.draft().crop.left==12);
  panel.load("Image","Scene",t,true);CHECK(!panel.dirty()&&!pos->isEnabled());
  t.info.scale.y=0.000000123456f;panel.load("Image","Scene",t,false);CHECK(!panel.dirty());pos->setValue(456);CHECK(panel.draft().info.scale.y==t.info.scale.y);
+ auto*properties=panel.findChild<QToolButton*>("inspectorProperties");auto*filters=panel.findChild<QToolButton*>("inspectorFilters");
+ CHECK(properties&&filters&&properties->isVisible()&&filters->isVisible());
+ int calls=0;panel.onProperties=[&]{++calls;};panel.onFilters=[&]{++calls;};properties->click();filters->click();CHECK(calls==2);
+ auto*tabs=panel.findChild<QTabWidget*>();CHECK(tabs);panel.setMotionDuration(150);
+ tabs->setCurrentIndex(1);CHECK(panel.motionActive()&&tabs->currentWidget()->graphicsEffect());
+ tabs->setCurrentIndex(2);CHECK(!tabs->widget(1)->graphicsEffect()&&panel.motionActive());
+ panel.setMotionDuration(0);CHECK(!panel.motionActive()&&!tabs->currentWidget()->graphicsEffect());
+ CHECK(panel.dirty()&&panel.draft().info.pos.x==456);
  CHECK(store.remove("Wide / test"));CHECK(store.names().isEmpty());
  return 0;
 }

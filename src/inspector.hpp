@@ -21,6 +21,9 @@
 #include <functional>
 #include <cmath>
 #include <QTabWidget>
+#include <QVariantAnimation>
+#include <QGraphicsOpacityEffect>
+#include <QPointer>
 #include "filter-panel.hpp"
 
 struct TransformState {
@@ -58,6 +61,15 @@ public:
 };
 class Inspector:public QWidget{
  PresetStore store;
+ QVariantAnimation tabMotion;
+ QPointer<QWidget> fadingPage;
+ int motionDuration=0;
+ void fadeTab(){
+  finishMotion();
+  auto*page=tabs->currentWidget();if(!motionDuration||!isVisible()||!page||page->graphicsEffect())return;
+  fadingPage=page;auto*effect=new QGraphicsOpacityEffect(page);effect->setOpacity(.7);page->setGraphicsEffect(effect);
+  tabMotion.setDuration(motionDuration);tabMotion.setStartValue(.7);tabMotion.setEndValue(1.0);tabMotion.start();
+ }
  QTabWidget*tabs;FilterPanel*filterPanel;QListWidget*usage;
  QLabel *title,*notice;
  QWidget*form;
@@ -101,11 +113,12 @@ public:
  explicit Inspector(const QString&path,QWidget*parent=nullptr):QWidget(parent),store(path){
   auto*l=new QVBoxLayout(this);
   auto*header=new QHBoxLayout;title=new QLabel("Inspector",this);title->setTextFormat(Qt::PlainText);title->setWordWrap(true);header->addWidget(title,1);
+  auto*properties=new GlyphButton("properties",this);properties->setObjectName("inspectorProperties");properties->setToolTip("Source properties");properties->setAccessibleName("Source properties");header->addWidget(properties);
+  auto*filters=new GlyphButton("filters",this);filters->setObjectName("inspectorFilters");filters->setToolTip("Native source filters");filters->setAccessibleName("Native source filters");header->addWidget(filters);
   pin=new QCheckBox("Pin",this);header->addWidget(pin);
   auto*close=new QPushButton("Close",this);header->addWidget(close);l->addLayout(header);
   connect(close,&QPushButton::clicked,this,[this]{if(onClose)onClose();});
-  auto*links=new QHBoxLayout;auto*properties=new QPushButton("Properties…",this);auto*filters=new QPushButton("Filters…",this);links->addWidget(properties);links->addWidget(filters);l->addLayout(links);
-  connect(properties,&QPushButton::clicked,this,[this]{if(onProperties)onProperties();});connect(filters,&QPushButton::clicked,this,[this]{if(onFilters)onFilters();});
+  connect(properties,&QToolButton::clicked,this,[this]{if(onProperties)onProperties();});connect(filters,&QToolButton::clicked,this,[this]{if(onFilters)onFilters();});
   tabs=new QTabWidget(this);l->addWidget(tabs,1);auto*transformPage=new QWidget(tabs);auto*tl=new QVBoxLayout(transformPage);tl->setContentsMargins(0,0,0,0);tabs->addTab(transformPage,"Transform");
   auto*area=new QScrollArea(this);area->setWidgetResizable(true);area->setFrameShape(QFrame::NoFrame);form=new QWidget;auto*f=new QFormLayout(form);f->setContentsMargins(0,0,0,0);
   posX=number("positionX");posY=number("positionY");scaleX=number("scaleX");scaleY=number("scaleY");rot=number("rotation");
@@ -134,9 +147,15 @@ public:
   usage=new QListWidget(usagePage);ul->addWidget(usage,1);
   auto*refresh=new QPushButton("Refresh usage",usagePage);ul->addWidget(refresh);tabs->addTab(usagePage,"Usage");
   connect(refresh,&QPushButton::clicked,this,[this]{if(onUsageRefresh)onUsageRefresh();});
-  connect(tabs,&QTabWidget::currentChanged,this,[this](int){if(onUsageRefresh)onUsageRefresh();});
+  tabMotion.setEasingCurve(QEasingCurve::OutCubic);
+  connect(&tabMotion,&QVariantAnimation::valueChanged,this,[this](const QVariant&v){if(fadingPage)if(auto*effect=qobject_cast<QGraphicsOpacityEffect*>(fadingPage->graphicsEffect()))effect->setOpacity(v.toReal());});
+  connect(&tabMotion,&QVariantAnimation::finished,this,[this]{finishMotion();});
+  connect(tabs,&QTabWidget::currentChanged,this,[this](int){if(onUsageRefresh)onUsageRefresh();fadeTab();});
   reloadPresets();
  }
+ void finishMotion(){tabMotion.stop();if(fadingPage){fadingPage->setGraphicsEffect(nullptr);fadingPage=nullptr;}}
+ void setMotionDuration(int ms){motionDuration=ms;for(auto*b:findChildren<QToolButton*>())if(auto*g=dynamic_cast<GlyphButton*>(b))g->setMotionDuration(ms);if(!ms)finishMotion();}
+ bool motionActive()const{return tabMotion.state()==QAbstractAnimation::Running;}
  void setVisual(bool visual){tabs->setTabEnabled(0,visual);if(!visual&&tabs->currentIndex()==0)tabs->setCurrentIndex(1);}
  bool filtersVisible()const{return tabs->currentIndex()==1;}
  bool usageVisible()const{return tabs->currentIndex()==2;}

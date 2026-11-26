@@ -1,6 +1,7 @@
 #include "../src/row.hpp"
 #include "../src/motion.hpp"
 #include "../src/reorder-motion.hpp"
+#include "../src/inspector-motion.hpp"
 #include <QApplication>
 #include <QTest>
 #define CHECK(x) do{if(!(x)){qCritical("failed: %s",#x);return 1;}}while(false)
@@ -34,5 +35,16 @@ int main(int argc,char**argv){
  origins=stack->positions();stack->removeWidget(a);stack->insertWidget(0,a);stack->activate();stack->animateFrom(origins,150);
  QTest::qWait(35);CHECK(stack->moving());stack->finish();CHECK(!stack->moving()&&a->y()==0);
  origins=stack->positions();stack->removeWidget(a);stack->insertWidget(2,a);stack->activate();stack->animateFrom(origins,0);CHECK(!stack->moving()&&a->y()==80);
+ QSplitter split(Qt::Vertical);auto*top=new QWidget;auto*panel=new QWidget;panel->setMinimumHeight(100);
+ split.addWidget(top);auto*drawer=new InspectorDrawer(panel,&split);split.addWidget(drawer);
+ split.resize(300,600);split.show();app.processEvents();
+ drawer->setOpen(true,160);QTest::qWait(45);CHECK(drawer->moving()&&drawer->height()>0&&drawer->height()<260&&panel->height()>=260);
+ QTest::qWait(200);CHECK(drawer->isOpen()&&!drawer->moving()&&drawer->height()>=260);
+ split.setSizes({220,380});drawer->rememberSize();int remembered=drawer->height();
+ drawer->setOpen(false,160);QTest::qWait(40);CHECK(drawer->moving()&&drawer->height()<remembered);
+ drawer->setOpen(true,160);QTest::qWait(200);CHECK(!drawer->moving()&&drawer->height()==remembered);
+ drawer->setOpen(false,0);CHECK(drawer->isHidden()&&!drawer->moving());
+ drawer->setOpen(true,0);CHECK(!drawer->isHidden()&&drawer->height()==remembered);
+ drawer->setOpen(false,160);drawer->finish();CHECK(drawer->isHidden());
  return 0;
 }
