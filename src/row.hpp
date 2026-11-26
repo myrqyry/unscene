@@ -45,6 +45,7 @@ public:
  std::function<bool(QPoint)> onDragMove;
  std::function<void(QPoint)> onDrop;
  std::function<void()> onDragCancel;
+ void cancelGesture(){pressed=dragging=false;}
  void setDropIndicator(int edge){if(dropEdge!=edge){dropEdge=edge;update();}}
  void setAccent(const QColor &color){accentColor=color;update();}
  QColor accent()const{return accentColor;}
@@ -116,9 +117,9 @@ protected:
    }
   }
   if(e->type()==QEvent::MouseButtonRelease&&static_cast<QMouseEvent*>(e)->button()==Qt::LeftButton){
-   auto*m=static_cast<QMouseEvent*>(e);bool wasDragging=dragging;pressed=dragging=false;
+   auto*m=static_cast<QMouseEvent*>(e);bool wasDragging=dragging,wasPressed=pressed;pressed=dragging=false;
    if(wasDragging){if(onDrop)onDrop(m->globalPosition().toPoint());}
-   else if(onBody)onBody();return true;
+   else if(wasPressed&&onBody)onBody();return true;
   }
   if(e->type()==QEvent::UngrabMouse&&pressed){pressed=dragging=false;if(onDragCancel)onDragCancel();}
   return QWidget::eventFilter(o,e);

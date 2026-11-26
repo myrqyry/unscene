@@ -23,5 +23,10 @@ int main(int argc,char**argv) {
  item.secondaryButtons[0]->click();
  if(properties!=1 || !item.expanded()) return 5;
  QTest::mouseClick(item.name,Qt::LeftButton);
- return item.expanded()?6:0;
+ if(item.expanded())return 6;
+ // A cancelled press must not expand a row on its eventual release.
+ QTest::mousePress(item.name,Qt::LeftButton);
+ item.cancelGesture();
+ QTest::mouseRelease(item.name,Qt::LeftButton);
+ return item.expanded()?7:0;
 }

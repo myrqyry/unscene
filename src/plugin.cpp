@@ -30,6 +30,8 @@
 #include <QFileDialog>
 #include <QSaveFile>
 #include "order.hpp"
+#include "drag-scroll.hpp"
+#include <QHideEvent>
 #include <QJsonObject>
 #include <QSplitter>
 #include <QGuiApplication>
@@ -531,7 +533,39 @@ class Dock : public QWidget {
  QVector<QString> rowOrder;
  QPointer<Row> dropMarker;
  QString dragCollection,dragKey;
- void clearDrag(){if(dropMarker)dropMarker->setDropIndicator(0);dropMarker=nullptr;dragKey.clear();dragCollection.clear();}
+ QTimer dragScrollTimer;
+ QPoint dragPosition;
+ void clearDrag(){
+  dragScrollTimer.stop();
+  if(dropMarker)dropMarker->setDropIndicator(0);dropMarker=nullptr;
+  if(!dragKey.isEmpty()){auto it=rowEntries.find(dragKey);if(it!=rowEntries.end())it->row->cancelGesture();}
+  dragKey.clear();dragCollection.clear();
+ }
+ int dragStep()const{
+  auto*view=scroll->viewport();
+  const int edge=qBound(24,fontMetrics().height()*3,64);
+  return dragScrollStep(view->rect(),view->mapFromGlobal(dragPosition),edge);
+ }
+ bool updateDropMarker(const Node&from,QPoint pos){
+  auto target=dropTarget(from,pos);
+  Row*next=target&&sameCollection(dragCollection)?rowEntries.value(target->first.key).row:nullptr;
+  if(dropMarker&&dropMarker!=next)dropMarker->setDropIndicator(0);
+  dropMarker=next;if(next)next->setDropIndicator(target->second?-1:1);
+  return next!=nullptr;
+ }
+ void updateDragScroll(){
+  auto*bar=scroll->verticalScrollBar();const int step=dragStep();
+  const bool canMove=(step<0&&bar->value()>bar->minimum())||(step>0&&bar->value()<bar->maximum());
+  if(canMove){if(!dragScrollTimer.isActive())dragScrollTimer.start();}
+  else dragScrollTimer.stop();
+ }
+ void scrollDraggedRow(){
+  auto it=rowEntries.find(dragKey);
+  if(stopping||!isVisible()||searching()||!sameCollection(dragCollection)||it==rowEntries.end()||!(QApplication::mouseButtons()&Qt::LeftButton)){clearDrag();return;}
+  auto*bar=scroll->verticalScrollBar();
+  bar->setValue(bar->value()+dragStep());
+  updateDropMarker(it->node,dragPosition);updateDragScroll();
+ }
  std::optional<QPair<Node,bool>> dropTarget(const Node&from,QPoint pos){
   if(from.scene||from.locked||searching()||!sameCollection(collection)||!scroll->viewport()->rect().contains(scroll->viewport()->mapFromGlobal(pos)))return {};
   for(auto&entry:rowEntries){
@@ -542,11 +576,10 @@ class Dock : public QWidget {
   }return {};
  }
  bool dragMove(const Node&from,QPoint pos){
+  if(stopping||searching()||from.scene||from.locked||!sameCollection(collection))return false;
   if(dragKey!=from.key){clearDrag();dragKey=from.key;dragCollection=collection;}
-  if(dropMarker)dropMarker->setDropIndicator(0);dropMarker=nullptr;
-  auto target=dropTarget(from,pos);
-  if(target&&sameCollection(dragCollection)){dropMarker=rowEntries.value(target->first.key).row;dropMarker->setDropIndicator(target->second?-1:1);}
-  return bool(target);
+  dragPosition=pos;
+  auto valid=updateDropMarker(from,pos);updateDragScroll();return valid;
  }
  void applySiblingOrder(const Node&n,const QString&expected,const QStringList&before,const QStringList&after){
   if(!sameCollection(expected)||before==after)return;
@@ -1170,6 +1203,7 @@ public:
   themeGeometry();
   connect(collapse,&QToolButton::clicked,this,[this]{animateStructure=true;opened.clear();selected.clear();saveOpened();dirty=true;request();});
   connect(expand,&QToolButton::clicked,this,[this]{animateStructure=true;opened.unite(sceneKeys);saveOpened();dirty=true;request();});
+  dragScrollTimer.setInterval(25);connect(&dragScrollTimer,&QTimer::timeout,this,[this]{scrollDraggedRow();});
   connect(&timer,&QTimer::timeout,this,[this]{refresh();});clock.start();timer.start(400);
  }
  void themeGeometry(){
@@ -1179,7 +1213,8 @@ public:
   bar->updateGeometry();
  }
  void themeChanged(){themeGeometry();resetRows=true;dirty=true;request();}
- void stop(){stopping=true;timer.stop();}
+ void hideEvent(QHideEvent*e)override{clearDrag();QWidget::hideEvent(e);}
+ void stop(){stopping=true;clearDrag();timer.stop();}
  void refresh(){
   if(stopping||editingAppearance||!isVisible())return;
   char *raw=obs_frontend_get_current_scene_collection();QString now=QString::fromUtf8(raw?raw:"");bfree(raw);
