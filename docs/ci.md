@@ -37,3 +37,14 @@ that exact test in xvfb-run, without skipping or altering its assertions.
 All 18 local Release CTests then passed with no desktop display available.
 The new native adapters and OBS33 SDK require hosted qualification. No
 Windows/macOS runtime claim, notarization or OBS33 GUI claim is made.
+
+Hosted PR run [45906445233](https://github.com/myrqyry/unscene/actions/runs/45906445233)
+passed both Linux legs and uploaded both binary archives and the source
+package. All six Windows/macOS legs reached plugin configuration, then
+failed because the pinned OBS Qt SDK lacks Qt6TestConfig.cmake. Removed
+the unnecessary QtTest dependency, retaining all test assertions: the
+row tests send real Qt mouse events and motion tests wait via a precise
+timer and event loop. The local configure/build with
+CMAKE_DISABLE_FIND_PACKAGE_Qt6Test=TRUE passed all 18 tests; the row and
+motion tests also passed on Qt minimal. Native hosted requalification
+of this change remains pending.

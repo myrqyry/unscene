@@ -36,7 +36,7 @@ switching scenes. No Aftermarket dependency.
 
 ## Build and install
 
-Requires a C++17 compiler, CMake 3.21+, Qt 6 Widgets/Test/Svg development
+Requires a C++17 compiler, CMake 3.21+, Qt 6 Widgets/Svg development
 packages, and libobs plus obs-frontend-api development packages matching the
 target OBS version. The locally runtime-tested target is OBS 32.2.0 on Linux.
 Linux tests require Xvfb and xauth for isolated libobs startup.

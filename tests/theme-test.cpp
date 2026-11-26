@@ -1,7 +1,6 @@
 #include "../src/theme.hpp"
 #include "../src/row.hpp"
 #include <QApplication>
-#include <QTest>
 #define CHECK(x) do{if(!(x)){qCritical("failed: %s",#x);return 1;}}while(false)
 int main(int argc,char**argv){
  QApplication app(argc,argv);

@@ -102,3 +102,14 @@ Native SDK bootstrap adapted from qualified Streaming Media 875f6b1; preserve
 legacy Linux32 archive and SDK recipe, new OBS33/Windows layouts and macOS
 bundles, enforce test floor and no skipped tests. Native adapter fixture tests
 pass; actual non-Linux and OBS33 hosted builds pending. No release or merge.
+
+## Native Qt SDK compatibility follow-up
+PR #2 run 45906445233 (and dispatch 45906027914) passed both real Linux
+OBS32/33 builds/tests/packages, failed all six native Windows/macOS legs
+at plugin CMake configure: pinned OBS Qt lacks Qt6TestConfig.cmake.
+Local RED with CMAKE_DISABLE_FIND_PACKAGE_Qt6Test=TRUE reproduced the
+failure. Removed unused QtTest includes/links; replaced only the two
+actual uses with normal Qt mouse events and a precise timer/event loop.
+No assertion or test removed. GREEN full local Release build with
+QtTest disabled, headless 18/18 CTests, row/motion also pass on minimal.
+Hosted native qualification pending. No OBS install, merge or release.
