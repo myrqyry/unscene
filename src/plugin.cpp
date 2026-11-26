@@ -25,6 +25,8 @@
 #include "inspector.hpp"
 #include "inspector-motion.hpp"
 #include "filter-undo.hpp"
+#include "filter-restore.hpp"
+#include "thumbnail-cache.hpp"
 #include "portable-filter.hpp"
 #include "portable-source.hpp"
 #include <QClipboard>
@@ -183,9 +185,7 @@ void restoreFilterUndo(const char*data){
   if(!settings)return;
   Source restored(obs_load_source(settings.get()),obs_source_release);
   if(!restored||uuid(restored.get())!=u->filter||obs_source_get_type(restored.get())!=OBS_SOURCE_TYPE_FILTER)return;
-  obs_source_filter_add(parent.get(),restored.get());
-  if(obs_source_filter_get_index(parent.get(),restored.get())<0)return;
-  obs_source_filter_set_index(parent.get(),restored.get(),size_t(index));
+  if(!attachRestoredFilter(parent.get(),restored.get(),size_t(index)))return;
  }else{
   if(!f)return;
   if(u->operation=="absent")obs_source_filter_remove(parent.get(),f.get());
@@ -516,7 +516,7 @@ class Dock : public QWidget {
   if(!found)closeInspector();else refreshInspectorExtras();
  }
  QSet<QString> opened; QString selected,collection; QVector<Node> previous; bool initialized=false, pending=false, stopping=false;
- QHash<QString,QPixmap> thumbnails;
+ ThumbnailCache thumbnails;
  QHash<QString,qint64> attempted;
  QHash<QString,QPointer<QLabel>> labels;
  QMultiHash<QString,QString> keys;
@@ -1042,9 +1042,9 @@ class Dock : public QWidget {
    auto s=source(n.uid);if(!s||!obs_source_showing(s.get()))continue;
    if(attempted.contains(n.uid)&&clock.elapsed()-attempted.value(n.uid)<3000)continue;
    attempted.insert(n.uid,clock.elapsed());
+   // Recheck output state immediately before synchronous graphics readback.
    if(!captureAllowed())return;
    const auto image=captureSnapshot(s.get());if(!hasVisiblePixels(image))return;
-   if(thumbnails.size()>=512)thumbnails.clear();
    auto pix=QPixmap::fromImage(image);thumbnails.insert(n.uid,pix);
    for(const auto&key:keys.values(n.uid)){auto l=labels.value(key);if(l&&snapshotKeys.contains(key))l->setPixmap(pix.scaled(l->size(),Qt::KeepAspectRatio,Qt::SmoothTransformation));}
    return;
@@ -1139,7 +1139,7 @@ class Dock : public QWidget {
    r->thumb->setPixmap(sourceArtwork(n,r));
    labels.insert(n.key,r->thumb);keys.insert(n.uid,n.key);
    if(density(n)!=Density::Compact){snapshotKeys.insert(n.key);}
-   if(snapshotKeys.contains(n.key)&&thumbnails.contains(n.uid))r->thumb->setPixmap(thumbnails.value(n.uid).scaled(r->thumb->size(),Qt::KeepAspectRatio,Qt::SmoothTransformation));
+   if(snapshotKeys.contains(n.key)&&thumbnails.contains(n.uid))r->thumb->setPixmap(thumbnails.lookup(n.uid).scaled(r->thumb->size(),Qt::KeepAspectRatio,Qt::SmoothTransformation));
    const auto appearance=appearances.load(n.uid);
    const auto art=appearancePixmap(appearance,artworkPalette(r),r->thumb->size());
    if(!art.isNull()){artworkOverrides.insert(n.uid);r->thumb->setPixmap(art);}
@@ -1228,7 +1228,7 @@ public:
   connect(collapse,&QToolButton::clicked,this,[this]{animateStructure=true;opened.clear();selected.clear();saveOpened();dirty=true;request();});
   connect(expand,&QToolButton::clicked,this,[this]{animateStructure=true;opened.unite(sceneKeys);saveOpened();dirty=true;request();});
   dragScrollTimer.setInterval(25);connect(&dragScrollTimer,&QTimer::timeout,this,[this]{scrollDraggedRow();});
-  connect(&timer,&QTimer::timeout,this,[this]{refresh();});clock.start();timer.start(400);
+  connect(&timer,&QTimer::timeout,this,[this]{refresh();});clock.start();timer.start(400); // Bounded polling and at most one idle capture per tick.
  }
  void themeGeometry(){
   int h=themeSpacing(this,Qt::Horizontal),v=themeSpacing(this,Qt::Vertical);

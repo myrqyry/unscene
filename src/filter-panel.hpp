@@ -71,7 +71,15 @@ public:
   action("Import filters…","import",false,false);
   l->addLayout(bar);l->addWidget(transfer,0,Qt::AlignRight);
   connect(list,&QListWidget::currentRowChanged,this,[this]{updateButtons();});
-  connect(list,&QListWidget::itemChanged,this,[this](auto*i){if(onAction)onAction(i->checkState()==Qt::Checked?"enable":"disable",i->data(Qt::UserRole).toString());});
+  connect(list->model(),&QAbstractItemModel::dataChanged,this,[this](const QModelIndex&first,const QModelIndex&last,const QList<int>&roles){
+   if(list->signalsBlocked()||!onAction||!roles.contains(Qt::CheckStateRole))return;
+   // Dispatch only check-state edits, not tooltip/name/icon updates.
+   for(int row=first.row();row<=last.row()&&row<entries.size();++row){
+    auto*i=list->item(row);if(!i)continue;
+    auto id=i->data(Qt::UserRole).toString();bool enabled=i->checkState()==Qt::Checked;
+    if(id==entries[row].id)onAction(enabled?"enable":"disable",id);
+   }
+  });
   updateButtons();
  }
  QString selectedId()const{return list->currentItem()?list->currentItem()->data(Qt::UserRole).toString():QString();}

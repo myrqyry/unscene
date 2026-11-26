@@ -6,7 +6,11 @@ int main(int argc,char**argv){
  QVector<FilterEntry> entries={{"a","Gain","gain",true,true},{"b","Crop","crop",false,false},{"c","Color","color",true,false}};
  panel.setEntries(entries);auto*list=panel.findChild<QListWidget*>("filterStack");CHECK(list&&list->count()==3);
  QString id,action;panel.onAction=[&](QString a,QString i){action=a;id=i;};
+ list->item(0)->setToolTip("updated tooltip");CHECK(action.isEmpty());
+ list->item(0)->setText("updated display");CHECK(action.isEmpty());
  list->setCurrentRow(1);list->item(1)->setCheckState(Qt::Checked);CHECK(id=="b"&&action=="enable");
+ list->item(1)->setCheckState(Qt::Unchecked);CHECK(id=="b"&&action=="disable");
+ action.clear();list->item(1)->setToolTip("new tooltip");CHECK(action.isEmpty());
  panel.setEntries({entries[2],entries[1],entries[0]});CHECK(panel.selectedId()=="b");
  for(auto*b:panel.findChildren<QToolButton*>())if(b->accessibleName()=="Enable filter"){action.clear();b->click();CHECK(action=="enable"&&id=="b");}
  CHECK(list->currentItem()->text().endsWith("(disabled)"));
