@@ -45,7 +45,7 @@ struct SceneSurfaceRoles {QColor container,header,accent,onContainer,onHeader;};
 inline SceneSurfaceRoles sceneSurfaceRoles(const QPalette&palette,const QColor&seed){
  using namespace SceneColor;
  auto base=palette.color(QPalette::Base),fg=palette.color(QPalette::WindowText);
- auto bg=lab(base),key=lab(seed.isValid()?seed:base);
+ auto bg=lab(base),key=lab(seed.isValid()?seed:palette.color(QPalette::Highlight));
  bool dark=luminance(base)<.35;
  double c=std::hypot(key.a,key.b),hue=std::atan2(key.b,key.a);
  double containerTone=qBound(.06,bg.l+(dark?.045:-.033),.97);

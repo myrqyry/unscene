@@ -20,7 +20,7 @@ int main(int argc,char**argv){
  CHECK(r.name->text().contains(QChar(0x2026)));
  CHECK(r.name->toolTip()=="Long name which should elide at narrow sizes");
  CHECK(r.name->palette().color(QPalette::WindowText)==p.color(QPalette::HighlightedText));
- r.setSelected(false);CHECK(r.name->palette().color(QPalette::WindowText)==p.color(QPalette::WindowText));
+ r.setSelected(false);CHECK(r.name->palette().color(QPalette::WindowText)==sceneSurfaceRoles(p,{}).onHeader);
  CHECK(r.hoverButtons.first()->accessibleName()=="Activate");
  // A stylesheet geometry change must affect real widget dimensions and paint.
  QWidget host;auto*layout=new QVBoxLayout(&host);auto*button=new GlyphButton("eye",&host);
@@ -53,6 +53,33 @@ int main(int argc,char**argv){
    CHECK(base.lightness()<128?roles.container.lightness()>base.lightness():roles.container.lightness()<base.lightness());
   }
  }
+ // Theme-default scenes must use the native accent and track theme changes.
+ QPalette defaultTheme;
+ defaultTheme.setColor(QPalette::Base,QColor("#242424"));
+ defaultTheme.setColor(QPalette::WindowText,QColor("#e5e5e5"));
+ defaultTheme.setColor(QPalette::Highlight,QColor("#da5291"));
+ auto pink=sceneSurfaceRoles(defaultTheme,{});
+ CHECK(pink.container==sceneSurfaceRoles(defaultTheme,defaultTheme.color(QPalette::Highlight)).container);
+ Row defaultHeader("Theme scene",true,false,0);
+ defaultHeader.setPalette(defaultTheme);defaultHeader.resize(260,40);defaultHeader.show();app.processEvents();
+ QEvent leave(QEvent::Leave);QApplication::sendEvent(&defaultHeader,&leave); CHECK(defaultHeader.grab().toImage().pixelColor(12,20).rgb()==pink.header.rgb());
+ defaultTheme.setColor(QPalette::Highlight,QColor("#43bda9"));
+ auto teal=sceneSurfaceRoles(defaultTheme,{});
+ CHECK(teal.container!=pink.container&&teal.header!=pink.header);
+ defaultHeader.setPalette(defaultTheme);app.processEvents();
+ CHECK(defaultHeader.grab().toImage().pixelColor(12,20).rgb()==teal.header.rgb());
+ CHECK(!defaultHeader.accent().isValid());
+ Row defaultChild("Child",false,false,1);defaultChild.setBranchColor({},true,true);
+ defaultChild.setPalette(defaultTheme);defaultChild.resize(260,40);defaultChild.show();app.processEvents();
+ QApplication::sendEvent(&defaultChild,&leave);
+ CHECK(defaultChild.grab().toImage().pixelColor(12,20).rgb()==teal.container.rgb());
+ defaultChild.setPalette(p);app.processEvents();
+ CHECK(defaultChild.grab().toImage().pixelColor(12,20).rgb()==sceneSurfaceRoles(p,{}).container.rgb());
+ const QColor custom("#cc9955");
+ defaultHeader.setAccent(custom);app.processEvents();
+ auto before=sceneSurfaceRoles(defaultTheme,custom).header;
+ defaultTheme.setColor(QPalette::Highlight,QColor("#5599ff"));defaultHeader.setPalette(defaultTheme);app.processEvents();
+ CHECK(defaultHeader.grab().toImage().pixelColor(12,20).rgb()==before.rgb());
  // Branch surfaces inherit their owning scene, not the source UUID.
  QWidget canvas;canvas.setStyleSheet("QWidget#branchFixture {background:#20242a;}");canvas.setObjectName("branchFixture");
  Row branch("Child",false,false,1,&canvas);branch.setPalette(p);branch.setBranchColor(QColor("#e05050"),true,true);

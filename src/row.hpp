@@ -75,7 +75,7 @@ public:
  void setStatus(const QString&s){status->setFullText(s);auto f=name->font();f.setWeight(QFont::Normal);if(f.pointSizeF()>2)f.setPointSizeF(f.pointSizeF()*.82);status->setFont(f);status->setFixedWidth(status->fontMetrics().horizontalAdvance(s)+2*themeSpacing(this,Qt::Horizontal));status->setVisible(!s.isEmpty());status->setToolTip(s);}
  QColor inkColor()const{
   if(selected)return palette().color(QPalette::HighlightedText);
-  if(isScene&&accentColor.isValid())return roles.onHeader;
+  if(isScene)return roles.onHeader;
   if(!isScene&&branchEnabled)return roles.onContainer;
   return palette().color(QPalette::WindowText);
  }
@@ -115,16 +115,16 @@ protected:
   }
   const QRectF rowSurface=surface.adjusted(1,isScene?0:1,-1,isScene?0:-1);
   QPainterPath rounded;rounded.addRoundedRect(rowSurface,radius,radius);
-  if(isScene&&accentColor.isValid()&&!selected)
+  if(isScene&&!selected)
    p.fillPath(rounded,roles.header);
-  if(selected||(hoverAmount>0&&!branchEnabled&&!accentColor.isValid())){
+  if(selected||(hoverAmount>0&&!isScene&&!branchEnabled&&!accentColor.isValid())){
    p.save();p.setClipPath(rounded);if(!selected)p.setOpacity(hoverAmount);
    auto*view=nativeList?static_cast<QWidget*>(nativeList.data()):this;
    QStyleOptionViewItem opt;opt.initFrom(view);opt.rect=rowSurface.toAlignedRect();opt.state=QStyle::State_Enabled|QStyle::State_Active|(selected?QStyle::State_Selected:QStyle::State_MouseOver);opt.showDecorationSelected=true;
    view->style()->drawControl(QStyle::CE_ItemViewItem,&opt,&p,view);
    p.restore();
   }
-  if(!selected&&hoverAmount>0&&(branchEnabled||accentColor.isValid())){
+  if(!selected&&hoverAmount>0&&(isScene||branchEnabled||accentColor.isValid())){
    auto layer=inkColor();layer.setAlphaF(.08*hoverAmount);p.fillPath(rounded,layer);
   }
   if(accentColor.isValid()){
