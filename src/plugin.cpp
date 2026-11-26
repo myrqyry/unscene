@@ -1134,7 +1134,7 @@ class Dock : public QWidget {
    r->setDisclosure(n.scene||n.group,isOpen);
    r->thumb->setFixedSize(thumbnailSize(density(n),n.scene));
    r->setSelected(n.program||n.preview||expanded);
-   r->setStatus(n.program?"LIVE":n.preview?"PREVIEW":"");
+   r->setStatus(!n.program&&n.preview?"PREVIEW":"");
    r->thumb->setPixmap(sourceArtwork(n,r));
    labels.insert(n.key,r->thumb);keys.insert(n.uid,n.key);
    if(density(n)!=Density::Compact){snapshotKeys.insert(n.key);}
@@ -1154,7 +1154,7 @@ class Dock : public QWidget {
     r->onDragCancel=[this]{clearDrag();};
    }
    if(n.scene){
-    r->addHover(obs_frontend_preview_program_mode_active()?"Select preview scene":"Activate scene","arrow-right",[this,n]{auto s=source(n.uid);if(!s||!obs_scene_from_source(s.get()))return;if(obs_frontend_preview_program_mode_active())obs_frontend_set_current_preview_scene(s.get());else obs_frontend_set_current_scene(s.get());request();});
+    r->addSceneActivation(n.program,obs_frontend_preview_program_mode_active(),n.preview,[this,n]{auto s=source(n.uid);if(!s||!obs_scene_from_source(s.get()))return;if(obs_frontend_preview_program_mode_active())obs_frontend_set_current_preview_scene(s.get());else obs_frontend_set_current_scene(s.get());request();});
     r->addHover("Add source","plus",[this,n]{QTimer::singleShot(0,this,[this,n]{addSource(n);});});
     r->addHover("More actions","more",[this,n]{queueContext(n);});
    }else{

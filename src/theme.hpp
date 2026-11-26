@@ -24,6 +24,7 @@ inline QPixmap glyphPixmap(const QString &id,const QColor&color,int size,qreal d
  {"eye-off","<path d='M3 3l18 18M10.6 5.1 12 5c6.5 0 10 7 10 7a19 19 0 0 1-3 3.7M6.2 6.2C3.4 8.4 2 12 2 12s3.5 7 10 7c1.7 0 3.1-.4 4.3-1.1'/>"},
  {"lock","<rect x='5' y='10' width='14' height='11' rx='2'/><path d='M8 10V7a4 4 0 0 1 8 0v3M12 14v3'/>"},
  {"unlock","<rect x='5' y='10' width='14' height='11' rx='2'/><path d='M8 10V7a4 4 0 0 1 7.5-2M12 14v3'/>"},
+ {"live","<circle cx='12' cy='12' r='2.3' fill='currentColor'/><path d='M8 8a5.7 5.7 0 0 0 0 8m8-8a5.7 5.7 0 0 1 0 8M5 5a10 10 0 0 0 0 14m14-14a10 10 0 0 1 0 14'/>"},
  {"arrow-right","<path d='M4 12h15m-6-6 6 6-6 6'/>"},
  {"up","<path d='m6 15 6-6 6 6'/>"},
  {"down","<path d='m6 9 6 6 6-6'/>"},
@@ -71,7 +72,7 @@ class GlyphButton:public QToolButton{
  QVariantAnimation hoverMotion,angleMotion,alphaMotion;
  qreal hover=0,angle=0,alpha=1;
  int duration=0;
- bool actionWanted=true,circular=false;
+ bool actionWanted=true,circular=false,indicatorOnly=false;
  void animate(QVariantAnimation&a,qreal from,qreal to){
   a.stop();a.setStartValue(from);a.setEndValue(to);a.setDuration(qMax(1,duration));a.start();
  }
@@ -99,6 +100,12 @@ public:
   animate(alphaMotion,alpha,showAction?1:0);
  }
  void spin(){if(!duration)return;angleMotion.stop();angle=0;animate(angleMotion,0,360);}
+ void setIndicatorOnly(bool value){
+  indicatorOnly=value;
+  setCursor(value?Qt::ArrowCursor:Qt::PointingHandCursor);
+  setFocusPolicy(value?Qt::NoFocus:Qt::StrongFocus);
+  update();
+ }
  void setCircular(bool value){if(circular!=value){circular=value;updateGeometry();update();}}
  void setGlyph(const QString&id){if(glyph!=id){glyph=id;update();}}
  QSize themedIconSize()const{
@@ -114,6 +121,7 @@ public:
  }
  QSize minimumSizeHint()const override{return sizeHint();}
 protected:
+ bool hitButton(const QPoint&p)const override{return !indicatorOnly&&QToolButton::hitButton(p);}
  void changeEvent(QEvent*e)override{QToolButton::changeEvent(e);if(e->type()==QEvent::StyleChange||e->type()==QEvent::FontChange||e->type()==QEvent::PaletteChange){updateGeometry();update();}}
  void enterEvent(QEnterEvent*e)override{if(duration)animate(hoverMotion,hover,1);else{hover=1;update();}QToolButton::enterEvent(e);}
  void leaveEvent(QEvent*e)override{if(duration)animate(hoverMotion,hover,0);else{hover=0;update();}QToolButton::leaveEvent(e);}
@@ -129,6 +137,10 @@ protected:
    QPainter painter(&rotated);painter.setRenderHint(QPainter::SmoothPixmapTransform);painter.translate(size/2.0,size/2.0);painter.rotate(angle);painter.drawPixmap(QPointF(-size/2.0,-size/2.0),pix);painter.end();pix=rotated;
   }
   opt.icon=QIcon(pix);opt.icon.addPixmap(pix,QIcon::Disabled);
+  if(indicatorOnly){
+   opt.state&=~(QStyle::State_MouseOver|QStyle::State_Sunken|QStyle::State_HasFocus);
+   style()->drawComplexControl(QStyle::CC_ToolButton,&opt,&p,this);return;
+  }
   // Delegate the complete button surface and glyph placement to the active style.
   // Blend only the hover layer; press/focus feedback stays immediate.
   if(!isDown()&&!hasFocus()&&hover>0&&hover<1){

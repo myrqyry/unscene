@@ -85,8 +85,14 @@ public:
  void settleMotion(){secondaryReveal->finish();}
  bool expanded()const{return opened;}
  void addHover(const QString &tip,const QString&icon,std::function<void()> action,bool always=false){
-  auto *b=makeButton(tip,icon,std::move(action));if(icon=="arrow-right"||icon=="plus")static_cast<GlyphButton*>(b)->setCircular(true);first->addWidget(b);hoverButtons.append(b);
+  auto *b=makeButton(tip,icon,std::move(action));if(icon=="arrow-right"||icon=="live"||icon=="plus")static_cast<GlyphButton*>(b)->setCircular(true);first->addWidget(b);hoverButtons.append(b);
   b->setProperty("always",always);auto p=b->sizePolicy();p.setRetainSizeWhenHidden(true);b->setSizePolicy(p);static_cast<GlyphButton*>(b)->revealAction(always||underMouse());
+ }
+ void addSceneActivation(bool live,bool studio,bool preview,std::function<void()> action){
+  const bool statusOnly=live&&(!studio||preview);
+  const auto tip=live?(statusOnly?"Live scene":"Live scene — select for preview"):(studio?"Select preview scene":"Activate scene");
+  addHover(tip,live?"live":"arrow-right",[statusOnly,action=std::move(action)]{if(!statusOnly&&action)action();},live);
+  if(statusOnly)static_cast<GlyphButton*>(hoverButtons.last())->setIndicatorOnly(true);
  }
  void addSecondary(const QString &tip,const QString&icon,std::function<void()> action){
   auto *b=makeButton(tip,icon,std::move(action));extra->addWidget(b);secondaryButtons.append(b);

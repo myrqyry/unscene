@@ -28,5 +28,23 @@ int main(int argc,char**argv) {
  QTest::mousePress(item.name,Qt::LeftButton);
  item.cancelGesture();
  QTest::mouseRelease(item.name,Qt::LeftButton);
- return item.expanded()?7:0;
+ if(item.expanded())return 7;
+ Row live("Program",true,false,0);
+ live.addSceneActivation(true,false,false,[&]{++activated;});
+ live.show();app.processEvents();
+ QEvent leave(QEvent::Leave);QApplication::sendEvent(&live,&leave);
+ auto*indicator=live.hoverButtons.first();
+ if(indicator->isHidden()||indicator->accessibleName()!="Live scene")return 8;
+ indicator->click();
+ if(activated!=1)return 9;
+ Row studio("Program",true,false,0);
+ studio.addSceneActivation(true,true,false,[&]{++activated;});
+ studio.show();app.processEvents();QApplication::sendEvent(&studio,&leave);
+ if(studio.hoverButtons.first()->isHidden())return 10;
+ studio.hoverButtons.first()->click();if(activated!=2)return 11;
+ Row inactive("Other",true,false,0);
+ inactive.addSceneActivation(false,false,false,[&]{++activated;});
+ inactive.show();app.processEvents();QApplication::sendEvent(&inactive,&leave);
+ if(!inactive.hoverButtons.first()->isHidden())return 12;
+ return 0;
 }
