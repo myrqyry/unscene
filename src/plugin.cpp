@@ -609,6 +609,8 @@ class Dock : public QWidget {
  SceneFolderStore folderStore{configPath("scene-folders.ini")};
  SceneFolders folders;
  SceneTabBar*sceneTabs=nullptr;
+ QWidget*tabStrip=nullptr;
+ bool hideSingleTab=navigation.hideSingleTab();
  FolderHistory folderHistory;
  QString activeTab,programTab,previewTab;
  bool tabsDirty=true;
@@ -646,7 +648,7 @@ class Dock : public QWidget {
    auto next=folders;auto old=from.folder?next.parentOfFolder(from.key):next.parentOfScene(from.uid);
    return old!=id&&(from.folder?next.moveFolder(from.key,id):next.moveScene(from.uid,id));
   };
-  auto tabPos=sceneTabs->mapFromGlobal(pos);int tab=sceneTabs->rect().contains(tabPos)?sceneTabs->tabAt(tabPos):-1;
+  auto tabPos=sceneTabs->mapFromGlobal(pos);int tab=sceneTabs->isVisible()&&sceneTabs->rect().contains(tabPos)?sceneTabs->tabAt(tabPos):-1;
   if(tab>=0){auto id=sceneTabs->tabData(tab).toString();if(valid(id))return OrganizationDrop{id,tab,{}};return {};}
   if(!scroll->viewport()->rect().contains(scroll->viewport()->mapFromGlobal(pos)))return {};
   for(auto&entry:rowEntries){auto&n=entry.node;auto*r=entry.row;
@@ -818,6 +820,7 @@ class Dock : public QWidget {
    sceneTabs->setTabIcon(i,icon);
    if(id==activeTab)sceneTabs->setCurrentIndex(i);
   }
+  tabStrip->setVisible(showSceneTabStrip(sceneTabs->count(),hideSingleTab));
   tabsDirty=false;
  }
  void tabOverflow(QWidget*anchor){
@@ -979,6 +982,15 @@ class Dock : public QWidget {
   auto*globalSearch=menu.addAction("Search all tabs");globalSearch->setCheckable(true);globalSearch->setChecked(allTabsSearch);
   connect(globalSearch,&QAction::toggled,this,[this](bool on){allTabsSearch=on;navigation.saveSearchAllTabs(on);search->setPlaceholderText(on?"Find across tabs…":"Find in tab…");dirty=true;request();});
   auto*folder=menu.addAction("New scene tab…");auto expected=collection;connect(folder,&QAction::triggered,this,[this,expected]{QTimer::singleShot(0,this,[this,expected]{newFolder({},expected);});});
+  auto*hideTabs=menu.addAction("Hide tab row when only one tab");hideTabs->setCheckable(true);hideTabs->setChecked(hideSingleTab);
+  connect(hideTabs,&QAction::toggled,this,[this](bool on){
+   if(!navigation.saveHideSingleTab(on)){blog(LOG_WARNING,"[Unscene] Could not save tab visibility preference");return;}
+   hideSingleTab=on;clearDrag();tabsDirty=true;request();
+  });
+  // The overflow remains reachable from settings even when the tab strip
+  // is hidden, including pinned-scene navigation.
+  auto*allTabs=menu.addAction("All scene tabs / pinned scenes…");
+  connect(allTabs,&QAction::triggered,this,[this,anchor]{QTimer::singleShot(0,this,[this,anchor]{tabOverflow(anchor);});});
   addOrganizationHistory(menu);
   menu.addSeparator();
   auto*backgrounds=menu.addMenu("Alternating backgrounds");
@@ -1738,7 +1750,7 @@ public:
   auto*refreshButton=new GlyphButton("refresh",bar);refreshButton->setToolTip("Refresh snapshots (when idle capture is enabled and outputs are idle)");
   connect(refreshButton,&QToolButton::clicked,this,[this,refreshButton]{refreshButton->spin();if(!captureAllowed())return;thumbnails.clear();attempted.clear();dirty=true;request();});
   auto*settingsButton=new GlyphButton("properties",bar);settingsButton->setToolTip("Dock settings");settingsButton->setAccessibleName("Dock settings");
-  auto*tabStrip=new QWidget(this);auto*tabLayout=new QHBoxLayout(tabStrip);tabLayout->setContentsMargins(0,0,0,0);tabLayout->setSpacing(2);
+  tabStrip=new QWidget(this);tabStrip->setObjectName("UnsceneTabStrip");tabStrip->setVisible(!hideSingleTab);auto*tabLayout=new QHBoxLayout(tabStrip);tabLayout->setContentsMargins(0,0,0,0);tabLayout->setSpacing(2);
   sceneTabs=new SceneTabBar(tabStrip);sceneTabs->setObjectName("UnsceneSceneTabs");sceneTabs->setAccessibleName("Scene organization tabs");
   sceneTabs->setExpanding(false);sceneTabs->setUsesScrollButtons(true);sceneTabs->setElideMode(Qt::ElideRight);sceneTabs->setDrawBase(true);
   sceneTabs->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);sceneTabs->setMinimumWidth(0);

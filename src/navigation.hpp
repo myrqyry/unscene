@@ -37,6 +37,7 @@ template<class Node> QVector<Node> filterHierarchy(const QVector<Node>&nodes,con
 inline QStringList favoriteFirst(QStringList ids,const QSet<QString>&favorites){
  std::stable_partition(ids.begin(),ids.end(),[&](const QString&id){return favorites.contains(id);});return ids;
 }
+inline bool showSceneTabStrip(int count,bool hideSingle){return !hideSingle||count>1;}
 class NavigationStore {
  QSettings settings;
  static QString key(const QString&collection){return "collections/"+QString::fromLatin1(collection.toUtf8().toHex())+"/expanded";}
@@ -65,6 +66,8 @@ public:
  }
  int stripeMode(bool scenes)const{return qBound(-1,settings.value(scenes?"stripes/scenes":"stripes/sources",-1).toInt(),1);}
  bool saveStripeMode(bool scenes,int mode){settings.setValue(scenes?"stripes/scenes":"stripes/sources",qBound(-1,mode,1));settings.sync();return settings.status()==QSettings::NoError;}
+ bool hideSingleTab()const{return settings.value("tabs/hideSingle",true).toBool();}
+ bool saveHideSingleTab(bool value){settings.setValue("tabs/hideSingle",value);settings.sync();return settings.status()==QSettings::NoError;}
  bool searchAllTabs()const{return settings.value("search/allTabs",false).toBool();}
  bool saveSearchAllTabs(bool value){settings.setValue("search/allTabs",value);settings.sync();return settings.status()==QSettings::NoError;}
  SnapshotMode snapshotMode()const{return settings.value("snapshots/idleCapture",false).toBool()?SnapshotMode::IdleOnly:SnapshotMode::CachedOnly;}

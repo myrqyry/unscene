@@ -21,6 +21,13 @@ int main(int argc,char**argv){
  CHECK(thumbnailSize(Density::Large,false).width()>thumbnailSize(Density::Normal,false).width());
  CHECK(store.motionDuration()==150);CHECK(store.saveMotion(0));{NavigationStore reloaded(path);CHECK(reloaded.motionDuration()==0);CHECK(reloaded.saveMotion(90));} CHECK(store.motionDuration()==90);
  CHECK(!store.searchAllTabs());
+ CHECK(store.hideSingleTab());
+ CHECK(!showSceneTabStrip(1,store.hideSingleTab()));
+ CHECK(!showSceneTabStrip(0,store.hideSingleTab()));
+ CHECK(showSceneTabStrip(2,store.hideSingleTab()));
+ CHECK(store.saveHideSingleTab(false));
+ {NavigationStore again(path);CHECK(!again.hideSingleTab());CHECK(showSceneTabStrip(1,again.hideSingleTab()));CHECK(again.saveHideSingleTab(true));}
+ CHECK(store.hideSingleTab());
  CHECK(store.saveSearchAllTabs(true));
  CHECK(store.saveFavorites("A",{"a","b"}));
  CHECK(store.saveFavorites("B",{"c"}));
