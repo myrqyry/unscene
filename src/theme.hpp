@@ -17,6 +17,13 @@
 
 inline QPixmap glyphPixmap(const QString &id,const QColor&color,int size,qreal dpr=1){
  static const QHash<QString,QString> paths={
+ {"close","<path d='m6 6 12 12M18 6 6 18'/>"},
+ {"pin","<path d='m15 3 6 6-4 1-3 5v4l-4-4-6 6m6-6-5-5h4l5-3Z'/>"},
+ {"pin-filled","<path d='m15 3 6 6-4 1-3 5v4l-4-4-5-5h4l5-3Z' fill='currentColor'/><path d='m10 15-6 6'/>"},
+ {"save","<path d='M4 3h13l3 3v15H4ZM8 3v6h8V3M8 21v-8h8v8'/>"},
+ {"load","<path d='M4 13v7h16v-7M12 3v12m-5-5 5 5 5-5'/>"},
+ {"trash","<path d='M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7'/>"},
+ {"edit","<path d='m15 4 5 5-11 11H4v-5ZM13 6l5 5'/>"},
  {"transition-in","<path d='M3 12h12m-5-5 5 5-5 5M17 4h4v16h-4'/>"},
  {"transition-out","<path d='M9 12h12m-5-5 5 5-5 5M7 4H3v16h4'/>"},
  {"blend","<circle cx='9' cy='12' r='6'/><circle cx='15' cy='12' r='6'/>"},

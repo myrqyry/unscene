@@ -19,6 +19,22 @@ int main(int argc,char**argv){
  auto*properties=panel.findChild<QToolButton*>("inspectorProperties");auto*filters=panel.findChild<QToolButton*>("inspectorFilters");
  CHECK(properties&&filters&&properties->isVisible()&&filters->isVisible());
  int calls=0;panel.onProperties=[&]{++calls;};panel.onFilters=[&]{++calls;};properties->click();filters->click();CHECK(calls==2);
+ auto*pin=panel.findChild<QToolButton*>("inspectorPin");auto*close=panel.findChild<QToolButton*>("inspectorClose");
+ CHECK(pin&&close&&pin->isCheckable()&&!pin->accessibleName().isEmpty());
+ pin->click();CHECK(panel.pinned());panel.unpin();CHECK(!panel.pinned());
+ int closed=0;panel.onClose=[&]{++closed;};close->click();CHECK(closed==1);
+ for(auto name:{"inspectorLoadPreset","inspectorSavePreset","inspectorRemovePreset","inspectorRefreshUsage"}){
+  auto*b=panel.findChild<QToolButton*>(name);CHECK(b&&!b->accessibleName().isEmpty()&&!b->toolTip().isEmpty());
+ }
+ auto*area=panel.findChild<QScrollArea*>("transformScroll");CHECK(area);
+ panel.resize(300,370);app.processEvents();
+ CHECK(panel.width()==300);CHECK(area->widget()->minimumSizeHint().width()<=area->viewport()->width());
+ CHECK(pos->accessibleName()=="Position X");
+ auto*type=panel.findChild<QComboBox*>("boundsType");auto*width=panel.findChild<QDoubleSpinBox*>("boundsX");
+ CHECK(type&&width&&width->isVisible());
+ const auto originalBounds=width->value();
+ type->setCurrentIndex(type->findData(int(OBS_BOUNDS_NONE)));app.processEvents();CHECK(!width->isVisible());
+ type->setCurrentIndex(type->findData(int(OBS_BOUNDS_SCALE_INNER)));app.processEvents();CHECK(width->isVisible()&&width->value()==originalBounds);
  auto*tabs=panel.findChild<QTabWidget*>();CHECK(tabs);panel.setMotionDuration(150);
  tabs->setCurrentIndex(1);CHECK(panel.motionActive()&&tabs->currentWidget()->graphicsEffect());
  tabs->setCurrentIndex(2);CHECK(!tabs->widget(1)->graphicsEffect()&&panel.motionActive());

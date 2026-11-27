@@ -25,6 +25,8 @@
 #include <QGraphicsOpacityEffect>
 #include <QPointer>
 #include "filter-panel.hpp"
+#include "row.hpp"
+#include <QStyleOptionSpinBox>
 
 struct TransformState {
  obs_transform_info info{};
@@ -59,6 +61,30 @@ public:
  bool save(const QString&name,const TransformState&t){if(name.trimmed().isEmpty()||name.size()>128||!TransformState::decode(t.encode()))return false;settings.setValue(key(name),t.encode());settings.sync();return settings.status()==QSettings::NoError;}
  bool remove(const QString&name){settings.remove(key(name));settings.sync();return settings.status()==QSettings::NoError;}
 };
+// Keep the full numeric range and precision without letting the longest
+// possible number dictate the minimum width of the entire dock.
+template<class Spin> class InspectorNumber:public Spin{
+public:
+ explicit InspectorNumber(QWidget*p):Spin(p){this->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Fixed);}
+ QSize minimumSizeHint()const override{
+  QStyleOptionSpinBox opt;this->initStyleOption(&opt);
+  const auto fm=this->fontMetrics();
+  return this->style()->sizeFromContents(QStyle::CT_SpinBox,&opt,QSize(fm.horizontalAdvance("-000.0"),fm.height()),this);
+ }
+ QSize sizeHint()const override{return minimumSizeHint();}
+};
+class InspectorDouble:public InspectorNumber<QDoubleSpinBox>{
+public:using InspectorNumber::InspectorNumber;
+protected:
+ QString textFromValue(double value)const override{
+  // Only presentation changes: value(), draft precision and input range
+  // stay identical to the previous six-decimal editor.
+  auto text=QDoubleSpinBox::textFromValue(value);
+  const auto decimal=locale().decimalPoint(),zero=locale().zeroDigit();
+  if(text.contains(decimal)){while(text.endsWith(zero))text.chop(zero.size());if(text.endsWith(decimal))text.chop(decimal.size());}
+  return text;
+ }
+};
 class Inspector:public QWidget{
  PresetStore store;
  QVariantAnimation tabMotion;
@@ -70,14 +96,14 @@ class Inspector:public QWidget{
   fadingPage=page;auto*effect=new QGraphicsOpacityEffect(page);effect->setOpacity(.7);page->setGraphicsEffect(effect);
   tabMotion.setDuration(motionDuration);tabMotion.setStartValue(.7);tabMotion.setEndValue(1.0);tabMotion.start();
  }
- QTabWidget*tabs;FilterPanel*filterPanel;QListWidget*usage;
- QLabel *title,*notice;
+ QTabWidget*tabs=nullptr;FilterPanel*filterPanel=nullptr;QListWidget*usage;
+ ElidedLabel *title;QLabel*notice;
  QWidget*form;
  QDoubleSpinBox *posX,*posY,*scaleX,*scaleY,*rot,*boundsX,*boundsY;
  QSpinBox *left,*top,*right,*bottom;
  QComboBox *align,*boundsType,*boundsAlign,*presets;
- QCheckBox *cropBounds,*pin;
- QPushButton *applyButton,*discardButton,*savePreset,*loadPreset,*removePreset;
+ QCheckBox *cropBounds;GlyphButton*pin;
+ QPushButton *applyButton,*discardButton;GlyphButton *savePreset,*loadPreset,*removePreset;
  TransformState base,displayBase;
  bool loading=false,locked=false,valid=false;
  void controls(const TransformState&t){
@@ -89,70 +115,102 @@ class Inspector:public QWidget{
  }
  void updateActions(){
   if(loading)return;
+  auto*f=static_cast<QFormLayout*>(form->layout());
+  const bool bounded=boundsType->currentData().toInt()!=OBS_BOUNDS_NONE;
+  for(auto*w:{boundsX->parentWidget(),static_cast<QWidget*>(boundsAlign),static_cast<QWidget*>(cropBounds)})
+   if(f->isRowVisible(w)!=bounded)f->setRowVisible(w,bounded);
   const bool changed=dirty();form->setEnabled(valid&&!locked);
   applyButton->setEnabled(valid&&!locked&&changed);discardButton->setEnabled(valid&&changed);
-  notice->setText(!valid?"Select a source":locked?"Item is locked":changed?"Unapplied changes — Apply or Discard":"Edits affect only this scene item");
+  notice->setText(!valid?"Select a source":locked?"Item is locked":changed?"Unapplied changes":"This item only");
   savePreset->setEnabled(valid);loadPreset->setEnabled(valid&&!locked&&presets->count());removePreset->setEnabled(presets->count());
  }
  void reloadPresets(const QString&name={}){
   presets->clear();presets->addItems(store.names());if(!name.isEmpty())presets->setCurrentText(name);updateActions();
  }
  QDoubleSpinBox*number(const QString&name,double minimum=-1e8){
-  auto*b=new QDoubleSpinBox(form);b->setObjectName(name);b->setDecimals(6);b->setRange(minimum,1e8);b->setKeyboardTracking(true);connect(b,&QDoubleSpinBox::valueChanged,this,[this]{updateActions();});return b;
+  auto*b=new InspectorDouble(form);b->setObjectName(name);b->setDecimals(6);b->setRange(minimum,1e8);b->setKeyboardTracking(true);connect(b,&QDoubleSpinBox::valueChanged,this,[this]{updateActions();});return b;
  }
- QSpinBox*crop(){auto*b=new QSpinBox(form);b->setRange(0,100000000);b->setKeyboardTracking(true);connect(b,&QSpinBox::valueChanged,this,[this]{updateActions();});return b;}
+ QSpinBox*crop(){auto*b=new InspectorNumber<QSpinBox>(form);b->setRange(0,100000000);b->setKeyboardTracking(true);connect(b,&QSpinBox::valueChanged,this,[this]{updateActions();});return b;}
+ static void compactCombo(QComboBox*b){
+  b->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);b->setMinimumContentsLength(6);b->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Fixed);
+  auto update=[b]{b->setToolTip(b->currentText());};QObject::connect(b,&QComboBox::currentTextChanged,b,update);update();
+ }
+ static GlyphButton*iconAction(QWidget*parent,const QString&id,const QString&name,const QString&label){
+  auto*b=new GlyphButton(id,parent);b->setObjectName(name);b->setToolTip(label);b->setAccessibleName(label);return b;
+ }
+ static void describe(QWidget*w,const QString&name){w->setAccessibleName(name);w->setToolTip(name);}
+ void compactSpacing(){
+  const int h=qBound(2,themeSpacing(this,Qt::Horizontal)/2,4),v=qBound(1,themeSpacing(this,Qt::Vertical)/2,3);
+  layout()->setContentsMargins(h,v,h,v);
+  auto layouts=findChildren<QLayout*>();for(auto*l:layouts){
+   auto*w=l->parentWidget();if(w&&(w==filterPanel||filterPanel->isAncestorOf(w)||qobject_cast<QAbstractSpinBox*>(w)||qobject_cast<QComboBox*>(w)||qobject_cast<QAbstractScrollArea*>(w)))continue;
+   if(qobject_cast<QFormLayout*>(l)){auto*f=static_cast<QFormLayout*>(l);f->setHorizontalSpacing(h);f->setVerticalSpacing(v);}
+   else l->setSpacing(v);
+  }
+ }
  QComboBox*alignment(){
   auto*b=new QComboBox(form);
   for(auto p:QList<QPair<QString,int>>{{"Top left",5},{"Top",4},{"Top right",6},{"Left",1},{"Center",0},{"Right",2},{"Bottom left",9},{"Bottom",8},{"Bottom right",10}})b->addItem(p.first,p.second);
-  connect(b,&QComboBox::currentIndexChanged,this,[this]{updateActions();});return b;
+  compactCombo(b);connect(b,&QComboBox::currentIndexChanged,this,[this]{updateActions();});return b;
  }
- static QWidget*pair(QWidget*a,QWidget*b){auto*w=new QWidget;auto*l=new QHBoxLayout(w);l->setContentsMargins(0,0,0,0);l->addWidget(a);l->addWidget(b);return w;}
+ static QWidget*pair(QWidget*a,QWidget*b){auto*w=new QWidget;auto*l=new QHBoxLayout(w);l->setContentsMargins(0,0,0,0);l->setSpacing(3);l->addWidget(a,1);l->addWidget(b,1);return w;}
 public:
  std::function<void()> onClose,onApply,onDiscard,onProperties,onFilters,onUsageRefresh;
  std::function<void(QString,QString)> onFilterAction;
  explicit Inspector(const QString&path,QWidget*parent=nullptr):QWidget(parent),store(path){
   auto*l=new QVBoxLayout(this);
-  auto*header=new QHBoxLayout;title=new QLabel("Inspector",this);title->setTextFormat(Qt::PlainText);title->setWordWrap(true);header->addWidget(title,1);
+  auto*header=new QHBoxLayout;title=new ElidedLabel("Inspector",this);auto heading=title->font();heading.setWeight(QFont::DemiBold);title->setFont(heading);header->addWidget(title,1);
   auto*properties=new GlyphButton("properties",this);properties->setObjectName("inspectorProperties");properties->setToolTip("Source properties");properties->setAccessibleName("Source properties");header->addWidget(properties);
   auto*filters=new GlyphButton("filters",this);filters->setObjectName("inspectorFilters");filters->setToolTip("Native source filters");filters->setAccessibleName("Native source filters");header->addWidget(filters);
-  pin=new QCheckBox("Pin",this);header->addWidget(pin);
-  auto*close=new QPushButton("Close",this);header->addWidget(close);l->addLayout(header);
-  connect(close,&QPushButton::clicked,this,[this]{if(onClose)onClose();});
+  pin=iconAction(this,"pin","inspectorPin","Pin inspected source");pin->setCheckable(true);header->addWidget(pin);
+  connect(pin,&QToolButton::toggled,this,[this](bool on){pin->setGlyph(on?"pin-filled":"pin");pin->setToolTip(on?"Unpin inspected source":"Pin inspected source");pin->setAccessibleName(pin->toolTip());});
+  auto*close=iconAction(this,"close","inspectorClose","Close inspector");header->addWidget(close);l->addLayout(header);
+  connect(close,&QToolButton::clicked,this,[this]{if(onClose)onClose();});
   connect(properties,&QToolButton::clicked,this,[this]{if(onProperties)onProperties();});connect(filters,&QToolButton::clicked,this,[this]{if(onFilters)onFilters();});
   tabs=new QTabWidget(this);l->addWidget(tabs,1);auto*transformPage=new QWidget(tabs);auto*tl=new QVBoxLayout(transformPage);tl->setContentsMargins(0,0,0,0);tabs->addTab(transformPage,"Transform");
-  auto*area=new QScrollArea(this);area->setWidgetResizable(true);area->setFrameShape(QFrame::NoFrame);form=new QWidget;auto*f=new QFormLayout(form);f->setContentsMargins(0,0,0,0);
+  auto*area=new QScrollArea(this);area->setObjectName("transformScroll");area->setWidgetResizable(true);area->setFrameShape(QFrame::NoFrame);form=new QWidget;auto*f=new QFormLayout(form);f->setContentsMargins(2,2,2,2);f->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);f->setRowWrapPolicy(QFormLayout::WrapLongRows);
   posX=number("positionX");posY=number("positionY");scaleX=number("scaleX");scaleY=number("scaleY");rot=number("rotation");
   boundsX=number("boundsX",0);boundsY=number("boundsY",0);left=crop();top=crop();right=crop();bottom=crop();align=alignment();boundsAlign=alignment();
-  boundsType=new QComboBox(form);for(auto s:{"None","Stretch","Scale inner","Scale outer","Scale to width","Scale to height","Maximum size"})boundsType->addItem(s,boundsType->count());
+  boundsType=new QComboBox(form);boundsType->setObjectName("boundsType");for(auto s:{"None","Stretch","Scale inner","Scale outer","Scale to width","Scale to height","Maximum size"})boundsType->addItem(s,boundsType->count());
   connect(boundsType,&QComboBox::currentIndexChanged,this,[this]{updateActions();});cropBounds=new QCheckBox("Crop to bounds",form);connect(cropBounds,&QCheckBox::toggled,this,[this]{updateActions();});
-  f->addRow("Position X / Y",pair(posX,posY));f->addRow("Scale X / Y",pair(scaleX,scaleY));f->addRow("Rotation",rot);f->addRow("Alignment",align);f->addRow("Bounds",boundsType);f->addRow("Bounds W / H",pair(boundsX,boundsY));f->addRow("Bounds alignment",boundsAlign);f->addRow("",cropBounds);f->addRow("Crop L / T",pair(left,top));f->addRow("Crop R / B",pair(right,bottom));
-  area->setWidget(form);area->setMinimumHeight(120);tl->addWidget(area,1);
+  compactCombo(boundsType);
+  describe(posX,"Position X");describe(posY,"Position Y");describe(scaleX,"Scale X");describe(scaleY,"Scale Y");
+  describe(rot,"Rotation in degrees");describe(align,"Item alignment");describe(boundsType,"Bounding box type");
+  describe(boundsX,"Bounds width");describe(boundsY,"Bounds height");describe(boundsAlign,"Bounds alignment");
+  describe(left,"Crop left");describe(top,"Crop top");describe(right,"Crop right");describe(bottom,"Crop bottom");
+  f->addRow("Position X/Y",pair(posX,posY));f->addRow("Scale X/Y",pair(scaleX,scaleY));f->addRow("Rotation",rot);f->addRow("Alignment",align);f->addRow("Bounds",boundsType);f->addRow("Size W/H",pair(boundsX,boundsY));f->addRow("Bounds align",boundsAlign);f->addRow("",cropBounds);f->addRow("Crop L/T",pair(left,top));f->addRow("Crop R/B",pair(right,bottom));
+  area->setWidget(form);area->setMinimumHeight(84);tl->addWidget(area,1);
   auto*pr=new QHBoxLayout;presets=new QComboBox(this);presets->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);presets->setMinimumContentsLength(6);pr->addWidget(presets,1);
-  loadPreset=new QPushButton("Load",this);savePreset=new QPushButton("Save…",this);removePreset=new QPushButton("Delete",this);pr->addWidget(loadPreset);pr->addWidget(savePreset);pr->addWidget(removePreset);tl->addLayout(pr);
-  notice=new QLabel(this);notice->setWordWrap(true);tl->addWidget(notice);
-  auto*actions=new QHBoxLayout;discardButton=new QPushButton("Discard",this);applyButton=new QPushButton("Apply",this);actions->addStretch();actions->addWidget(discardButton);actions->addWidget(applyButton);tl->addLayout(actions);
+  presets->setToolTip("Transform presets");presets->setAccessibleName("Transform presets");
+  loadPreset=iconAction(this,"load","inspectorLoadPreset","Load transform preset");savePreset=iconAction(this,"save","inspectorSavePreset","Save transform preset");removePreset=iconAction(this,"trash","inspectorRemovePreset","Delete transform preset");pr->addWidget(loadPreset);pr->addWidget(savePreset);pr->addWidget(removePreset);tl->addLayout(pr);
+  notice=new QLabel(this);notice->setWordWrap(true);notice->setMinimumWidth(0);notice->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);
+  auto*actions=new QHBoxLayout;discardButton=new QPushButton("Discard",this);applyButton=new QPushButton("Apply",this);actions->addWidget(notice,1);actions->addWidget(discardButton);actions->addWidget(applyButton);tl->addLayout(actions);
   connect(applyButton,&QPushButton::clicked,this,[this]{if(onApply)onApply();});
   connect(discardButton,&QPushButton::clicked,this,[this]{if(onDiscard)onDiscard();});
-  connect(loadPreset,&QPushButton::clicked,this,[this]{if(auto t=store.load(presets->currentText()))controls(*t);});
-  connect(savePreset,&QPushButton::clicked,this,[this]{
+  connect(loadPreset,&QToolButton::clicked,this,[this]{if(auto t=store.load(presets->currentText()))controls(*t);});
+  connect(savePreset,&QToolButton::clicked,this,[this]{
    bool ok=false;auto name=QInputDialog::getText(this,"Save transform preset","Name",QLineEdit::Normal,presets->currentText(),&ok).trimmed();if(!ok||name.isEmpty())return;
    if(store.load(name)&&QMessageBox::question(this,"Replace preset","Replace existing preset?",QMessageBox::Yes|QMessageBox::Cancel,QMessageBox::Cancel)!=QMessageBox::Yes)return;
    if(!store.save(name,draft()))QMessageBox::warning(this,"Unscene","Could not save preset.");reloadPresets(name);
   });
-  connect(removePreset,&QPushButton::clicked,this,[this]{auto name=presets->currentText();if(!name.isEmpty()&&QMessageBox::question(this,"Delete preset","Delete this preset?",QMessageBox::Yes|QMessageBox::Cancel,QMessageBox::Cancel)==QMessageBox::Yes){store.remove(name);reloadPresets();}});
+  connect(removePreset,&QToolButton::clicked,this,[this]{auto name=presets->currentText();if(!name.isEmpty()&&QMessageBox::question(this,"Delete preset","Delete this preset?",QMessageBox::Yes|QMessageBox::Cancel,QMessageBox::Cancel)==QMessageBox::Yes){store.remove(name);reloadPresets();}});
   filterPanel=new FilterPanel(tabs);tabs->addTab(filterPanel,"Filters");
   filterPanel->onAction=[this](QString a,QString id){if(onFilterAction)onFilterAction(a,id);};
   auto*usagePage=new QWidget(tabs);auto*ul=new QVBoxLayout(usagePage);ul->setContentsMargins(0,0,0,0);
-  auto*hint=new QLabel("Direct instances in scenes and groups (including collapsed branches).",usagePage);hint->setWordWrap(true);ul->addWidget(hint);
+  auto*usageHeader=new QHBoxLayout;auto*hint=new QLabel("Direct scene/group instances",usagePage);hint->setWordWrap(true);hint->setToolTip("Includes collapsed branches; excludes indirect nested scenes.");usageHeader->addWidget(hint,1);
+  auto*refresh=iconAction(usagePage,"refresh","inspectorRefreshUsage","Refresh usage");usageHeader->addWidget(refresh);ul->addLayout(usageHeader);
   usage=new QListWidget(usagePage);ul->addWidget(usage,1);
-  auto*refresh=new QPushButton("Refresh usage",usagePage);ul->addWidget(refresh);tabs->addTab(usagePage,"Usage");
-  connect(refresh,&QPushButton::clicked,this,[this]{if(onUsageRefresh)onUsageRefresh();});
+  tabs->addTab(usagePage,"Usage");
+  connect(refresh,&QToolButton::clicked,this,[this]{if(onUsageRefresh)onUsageRefresh();});
   tabMotion.setEasingCurve(QEasingCurve::OutCubic);
   connect(&tabMotion,&QVariantAnimation::valueChanged,this,[this](const QVariant&v){if(fadingPage)if(auto*effect=qobject_cast<QGraphicsOpacityEffect*>(fadingPage->graphicsEffect()))effect->setOpacity(v.toReal());});
   connect(&tabMotion,&QVariantAnimation::finished,this,[this]{finishMotion();});
   connect(tabs,&QTabWidget::currentChanged,this,[this](int){if(onUsageRefresh)onUsageRefresh();fadeTab();});
-  reloadPresets();
+  reloadPresets();compactSpacing();
  }
+protected:
+ void changeEvent(QEvent*e)override{QWidget::changeEvent(e);if(tabs&&filterPanel&&(e->type()==QEvent::StyleChange||e->type()==QEvent::FontChange))compactSpacing();}
+public:
  void finishMotion(){tabMotion.stop();if(fadingPage){fadingPage->setGraphicsEffect(nullptr);fadingPage=nullptr;}}
  void setMotionDuration(int ms){motionDuration=ms;for(auto*b:findChildren<QToolButton*>())if(auto*g=dynamic_cast<GlyphButton*>(b))g->setMotionDuration(ms);if(!ms)finishMotion();}
  bool motionActive()const{return tabMotion.state()==QAbstractAnimation::Running;}
@@ -178,7 +236,7 @@ public:
  }
  bool dirty()const{return valid&&draft().encode()!=base.encode();}
  void load(const QString&name,const QString&scene,const TransformState&t,bool isLocked){
-  valid=true;locked=isLocked;title->setText(name+" — "+scene);controls(t);base=t;displayBase=rawDraft();updateActions();
+  valid=true;locked=isLocked;title->setFullText(name);title->setToolTip(name+" — "+scene);title->setAccessibleName(name+" — "+scene);controls(t);base=t;displayBase=rawDraft();updateActions();
  }
  void setLocked(bool value){locked=value;updateActions();}
  void invalidate(){valid=false;unpin();updateActions();}

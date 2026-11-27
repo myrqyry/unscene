@@ -39,10 +39,10 @@ class FilterPanel:public QWidget{
 public:
  std::function<void(QString,QString)> onAction;
  explicit FilterPanel(QWidget*p=nullptr):QWidget(p){
-  auto*l=new QVBoxLayout(this);l->setContentsMargins(0,0,0,0);
-  auto*hint=new QLabel("Filters are shared by every instance of this source.",this);hint->setWordWrap(true);l->addWidget(hint);
+  auto*l=new QVBoxLayout(this);l->setContentsMargins(2,2,2,2);l->setSpacing(3);
+  auto*hint=new QLabel("Shared across source instances.",this);hint->setWordWrap(true);l->addWidget(hint);
   list=new QListWidget(this);list->setObjectName("filterStack");list->setSelectionMode(QAbstractItemView::SingleSelection);l->addWidget(list,1);
-  auto*bar=new QHBoxLayout;bar->setContentsMargins(0,0,0,0);
+  auto*bar=new QHBoxLayout;bar->setContentsMargins(0,0,0,0);bar->setSpacing(2);
   auto add=[&](const QString&label,const QString&action,const QString& icon,bool needsSelection){
    auto*b=new GlyphButton(icon,this);b->setToolTip(label);b->setAccessibleName(label);bar->addWidget(b);
    if(needsSelection)selectionButtons.append(b);
@@ -54,22 +54,20 @@ public:
   toggle=new GlyphButton("eye",this);bar->addWidget(toggle);
   connect(toggle,&QToolButton::clicked,this,[this]{int row=list->currentRow();if(row>=0&&row<entries.size()&&onAction)onAction(entries[row].enabled?"disable":"enable",entries[row].id);});
   bar->addStretch();
-  auto*more=new QToolButton(this);more->setText("Rename");bar->addWidget(more);selectionButtons.append(more);
-  connect(more,&QToolButton::clicked,this,[this]{if(onAction)onAction("rename",selectedId());});
-  auto*settings=new QToolButton(this);settings->setText("Edit…");bar->addWidget(settings);
-  connect(settings,&QToolButton::clicked,this,[this]{if(onAction)onAction("settings",selectedId());});
-  auto*transfer=new QToolButton(this);transfer->setText("Copy / Paste");transfer->setPopupMode(QToolButton::InstantPopup);
+  auto*settings=add("Edit filter settings","settings","edit",true);settings->setObjectName("filterEdit");
+  auto*transfer=new GlyphButton("more",this);transfer->setObjectName("filterMore");transfer->setToolTip("Filter actions — rename, copy, paste, import, export");transfer->setAccessibleName("More filter actions");transfer->setPopupMode(QToolButton::InstantPopup);bar->addWidget(transfer);
   auto*menu=new QMenu(transfer);transfer->setMenu(menu);
   auto action=[&](const QString&label,const QString&op,bool selected,bool any){
    auto*a=menu->addAction(label);
    connect(menu,&QMenu::aboutToShow,this,[this,a,selected,any]{a->setEnabled((!selected||!selectedId().isEmpty())&&(!any||!entries.isEmpty()));});
    connect(a,&QAction::triggered,this,[this,op]{if(onAction)onAction(op,selectedId());});
   };
+  action("Rename filter…","rename",true,false);menu->addSeparator();
   action("Copy filter","copy",true,true);action("Copy filter stack","copy-stack",false,true);
   action("Paste filters…","paste",false,false);menu->addSeparator();
   action("Export filter…","export",true,true);action("Export filter stack…","export-stack",false,true);
   action("Import filters…","import",false,false);
-  l->addLayout(bar);l->addWidget(transfer,0,Qt::AlignRight);
+  l->addLayout(bar);
   connect(list,&QListWidget::currentRowChanged,this,[this]{updateButtons();});
   connect(list->model(),&QAbstractItemModel::dataChanged,this,[this](const QModelIndex&first,const QModelIndex&last,const QList<int>&roles){
    if(list->signalsBlocked()||!onAction||!roles.contains(Qt::CheckStateRole))return;

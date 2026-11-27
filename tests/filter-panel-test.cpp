@@ -14,6 +14,11 @@ int main(int argc,char**argv){
  panel.setEntries({entries[2],entries[1],entries[0]});CHECK(panel.selectedId()=="b");
  for(auto*b:panel.findChildren<QToolButton*>())if(b->accessibleName()=="Enable filter"){action.clear();b->click();CHECK(action=="enable"&&id=="b");}
  CHECK(list->currentItem()->text().endsWith("(disabled)"));
+ auto*edit=panel.findChild<QToolButton*>("filterEdit");auto*more=panel.findChild<QToolButton*>("filterMore");
+ CHECK(edit&&more&&more->menu()&&!edit->accessibleName().isEmpty());
+ panel.resize(260,180);panel.show();app.processEvents();CHECK(panel.width()==260);
+ action.clear();edit->click();CHECK(action=="settings"&&id=="b");
+ CHECK(more->menu()->actions().first()->text()=="Rename filter…");
  CHECK(filterCompatible(OBS_SOURCE_VIDEO,OBS_SOURCE_VIDEO));
  CHECK(!filterCompatible(OBS_SOURCE_VIDEO,OBS_SOURCE_AUDIO));
  CHECK(!filterCompatible(OBS_SOURCE_VIDEO,OBS_SOURCE_ASYNC_VIDEO));
