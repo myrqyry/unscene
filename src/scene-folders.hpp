@@ -35,6 +35,18 @@ public:
  QString parentOfScene(const QString&id)const{return membership.value(id);}
  bool contains(const QString&id)const{return index(id)>=0;}
  bool validTab(const QString&id)const{return id.isEmpty()||(contains(id)&&parentOfFolder(id).isEmpty());}
+ QStringList rootTabs()const{
+  QStringList result;for(const auto&f:entries)if(f.parent.isEmpty())result.append(f.id);return result;
+ }
+ bool reorderTabs(const QStringList&order){
+  auto current=rootTabs();
+  if(order.size()!=current.size()||QSet<QString>(order.begin(),order.end())!=QSet<QString>(current.begin(),current.end()))return false;
+  auto old=entries;int i=0;
+  for(auto&f:entries)if(f.parent.isEmpty()){
+   auto id=order[i++];for(const auto&candidate:old)if(candidate.id==id){f=candidate;break;}
+  }
+  return true;
+ }
  QString rootForFolder(const QString&id)const{
   auto current=id;
   while(!current.isEmpty()&&!parentOfFolder(current).isEmpty())current=parentOfFolder(current);
@@ -104,6 +116,24 @@ public:
   for(auto it=scenes.begin();it!=scenes.end();++it)if(result.contains(it.value().toString()))result.moveScene(it.key(),it.value().toString());
   return result;
  }
+};
+
+// A separate, bounded history of presentation edits; never enters OBS output undo.
+class FolderHistory {
+ struct Entry{QByteArray before,after;};
+ QVector<Entry> undo,redo;
+public:
+ void clear(){undo.clear();redo.clear();}
+ bool canUndo()const{return !undo.isEmpty();}
+ bool canRedo()const{return !redo.isEmpty();}
+ void record(const QByteArray&before,const QByteArray&after){
+  if(before==after)return;
+  redo.clear();undo.append({before,after});if(undo.size()>64)undo.removeFirst();
+ }
+ QByteArray undoTarget(const QByteArray&current)const{return canUndo()&&undo.last().after==current?undo.last().before:QByteArray();}
+ QByteArray redoTarget(const QByteArray&current)const{return canRedo()&&redo.last().before==current?redo.last().after:QByteArray();}
+ void didUndo(){if(canUndo())redo.append(undo.takeLast());}
+ void didRedo(){if(canRedo())undo.append(redo.takeLast());}
 };
 
 class SceneFolderStore {

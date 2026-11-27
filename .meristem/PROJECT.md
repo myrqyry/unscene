@@ -8,7 +8,7 @@ Unscene is a native OBS Studio dock that brings the entire scene collection into
 
 ## Stable invariants
 
-- OBS owns the scene collection. Unscene does not maintain a second scene model on disk; editing actions mutate OBS state directly and can affect the live output. Presentation-only scene tabs are top-level folders, not native OBS collection switches. Folders store UUID membership and hierarchy in module settings; deletion promotes contents without deleting OBS scenes.
+- OBS owns the scene collection. Unscene does not maintain a second scene model on disk; editing actions mutate OBS state directly and can affect the live output. Presentation-only scene tabs are top-level folders, not native OBS collection switches. Folders store UUID membership and hierarchy in module settings; deletion promotes contents without deleting OBS scenes. Tab order and scene/folder membership can be edited by drag and drop; a bounded session-local organization history is independent of OBS edit undo.
 - Expanding a scene or selecting a source in the dock does not activate a scene. Explicit scene activation selects the program scene in normal mode or the preview scene in Studio Mode.
 - Automatic snapshots are disabled by default. Opt-in idle capture is gated while OBS reports streaming, recording, replay buffer, or virtual camera active.
 - Sources are identified by UUID; item-targeted edits also identify the owning scene or group and the scene item ID. Duplicate paste and portable source import intentionally create independent OBS sources.

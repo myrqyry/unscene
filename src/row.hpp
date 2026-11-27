@@ -177,7 +177,7 @@ protected:
    const QRectF indicator(rowSurface.left()+2,rowSurface.top()+4,barWidth,qMax(0.0,rowSurface.height()-8));
    p.drawRoundedRect(indicator,barWidth/2,barWidth/2);
   }
-  if(dropEdge){QPen pen(palette().color(QPalette::Highlight));pen.setWidth(2);p.setPen(pen);int y=dropEdge<0?1:height()-2;p.drawLine(outerLeft(),y,width()-2,y);}
+  if(dropEdge){QPen pen(palette().color(QPalette::Highlight));pen.setWidth(2);p.setPen(pen);if(dropEdge==2){p.setBrush(Qt::NoBrush);p.drawRoundedRect(rowSurface.adjusted(1,1,-1,-1),radius,radius);}else{int y=dropEdge<0?1:height()-2;p.drawLine(outerLeft(),y,width()-2,y);}}
   if(opened&&!isScene){auto divider=inkColor();divider.setAlpha(32);p.setPen(divider);const int y=secondaryReveal->geometry().top()-1;p.drawLine(outerLeft(),y,width()-5,y);}
  }
  void contextMenuEvent(QContextMenuEvent*e)override{if(onAppearance){onAppearance();e->accept();}else QWidget::contextMenuEvent(e);}
