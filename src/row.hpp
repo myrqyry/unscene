@@ -266,8 +266,11 @@ private:
   const auto native=nativeItemSize(view,content);
   const auto insetX=qBound(3,(native.width()-content.width())/2,6);
   const auto insetY=qBound(1,(native.height()-content.height())/4,2);
-  const int indent=qMax(10,disclosure->sizeHint().width()*2/3)+qBound(1,h/2,4);
-  layout()->setContentsMargins(insetX+nestDepth*indent,insetY,insetX,insetY);
+  // Keep hierarchy readable without spending a full icon width per level.
+  // Only horizontal padding changes; native button/artwork sizes are intact.
+  const int indent=qBound(6,disclosure->sizeHint().width()/3,8);
+  const int leftInset=qMin(insetX,4);
+  layout()->setContentsMargins(leftInset+nestDepth*indent,insetY,insetX,insetY);
   layout()->setSpacing(qBound(0,v/3,2));first->setSpacing(qBound(2,h/2,4));extra->setSpacing(qBound(1,h/3,3));
   // Preserve explicit theme minimums while removing redundant content padding.
   const int themeFloor=nativeItemSize(view,QSize(0,0)).height();

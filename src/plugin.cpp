@@ -1821,7 +1821,7 @@ public:
  }
  void themeGeometry(){
   int h=themeSpacing(this,Qt::Horizontal),v=themeSpacing(this,Qt::Vertical);
-  dockLayout->setContentsMargins(qBound(1,h/3,3),qBound(1,v/3,3),qBound(1,h/3,3),qBound(1,v/3,3));dockLayout->setSpacing(qBound(1,v/3,3));
+  dockLayout->setContentsMargins(1,qBound(1,v/3,3),qBound(1,h/3,3),qBound(1,v/3,3));dockLayout->setSpacing(qBound(1,v/3,3));
   rows->setSpacing(0);search->setMinimumWidth(search->fontMetrics().horizontalAdvance("MMMM"));
   sceneTabs->setFont(rowTypography(font(),TypographyRole::Tab));sceneTabs->updateGeometry();
   bar->updateGeometry();

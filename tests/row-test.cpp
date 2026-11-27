@@ -130,5 +130,14 @@ int main(int argc,char**argv) {
  firstSource.setBranchColor({},false,false);lastSource.setBranchColor({},false,true);app.processEvents();
  const auto firstImage=firstSource.grab().toImage(),lastImage=lastSource.grab().toImage();
  if(firstImage.pixelColor(4,1)!=lastImage.pixelColor(4,1)||firstImage.pixelColor(4,firstImage.height()-1)==lastImage.pixelColor(4,lastImage.height()-1))return 33;
+ // Reduce per-level left padding without shrinking artwork or row controls.
+ Row level0("Scene",true,false,0),level1("Source",false,false,1),level2("Nested",false,false,2),level3("Deep",false,false,3);
+ for(auto*r:{&level0,&level1,&level2,&level3}){r->resize(300,r->sizeHint().height());r->show();}
+ app.processEvents();
+ const auto left=[](const Row&r){return r.layout()->contentsMargins().left();};
+ const int step=left(level2)-left(level1);
+ if(left(level0)>4||left(level1)>12||step<5||step>8||left(level3)-left(level2)!=step)return 36;
+ if(level1.thumb->width()!=level2.thumb->width()||level1.thumb->height()!=level2.thumb->height())return 37;
+ if(level1.name->width()<=level2.name->width()||level1.name->width()<180)return 38;
  return 0;
 }
