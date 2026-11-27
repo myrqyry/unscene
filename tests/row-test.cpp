@@ -70,5 +70,13 @@ int main(int argc,char**argv) {
  if(sceneFont.weight()<=sourceFont.weight()||sceneFont.pointSizeF()<sourceFont.pointSizeF()||metaFont.pointSizeF()<10||tabFont.weight()<=sourceFont.weight())return 18;
  base.setPixelSize(16);
  if(rowTypography(base,TypographyRole::Status).pixelSize()<13)return 19;
+ Row sceneTools("Scene tools",true,false,0);
+ int shortcut=0,disclosed=0;
+ sceneTools.onDisclosure=[&]{++disclosed;};
+ sceneTools.addSecondary("Transition in","transition-in",[&]{++shortcut;});
+ sceneTools.setExpanded(true);sceneTools.settleMotion();sceneTools.show();app.processEvents();
+ if(sceneTools.secondary->isHidden())return 20;
+ sceneTools.secondaryButtons.first()->click();if(shortcut!=1)return 21;
+ sceneTools.setExpanded(false);sceneTools.settleMotion();if(!sceneTools.secondary->isHidden()&&sceneTools.secondary->isVisible())return 22;
  return 0;
 }

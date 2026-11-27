@@ -17,6 +17,10 @@
 
 inline QPixmap glyphPixmap(const QString &id,const QColor&color,int size,qreal dpr=1){
  static const QHash<QString,QString> paths={
+ {"transition-in","<path d='M3 12h12m-5-5 5 5-5 5M17 4h4v16h-4'/>"},
+ {"transition-out","<path d='M9 12h12m-5-5 5 5-5 5M7 4H3v16h4'/>"},
+ {"blend","<circle cx='9' cy='12' r='6'/><circle cx='15' cy='12' r='6'/>"},
+ {"transform","<rect x='5' y='5' width='14' height='14' rx='1'/><path d='M3 3h4M3 3v4M21 3h-4M21 3v4M3 21h4M3 21v-4M21 21h-4M21 21v-4'/>"},
  {"inspector","<rect x='3' y='4' width='18' height='16' rx='2'/><path d='M3 11h18M8 15h8M8 7h4'/>"},
  {"minus","<path d='M5 12h14'/>"},
  {"plus","<path d='M12 5v14M5 12h14'/>"},

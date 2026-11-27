@@ -65,7 +65,7 @@ public:
  SourceArtworkLabel *thumb;
  QWidget *secondary;
  QVector<QToolButton*> hoverButtons, secondaryButtons;
- std::function<void()> onBody,onAppearance;
+ std::function<void()> onBody,onAppearance,onDisclosure;
  std::function<bool(QPoint)> onDragMove;
  std::function<void(QPoint)> onDrop;
  std::function<void()> onDragCancel;
@@ -84,7 +84,7 @@ public:
   auto *outer=new QVBoxLayout(this);outer->setContentsMargins(0,0,0,0);
   top=new QWidget(this);first=new QHBoxLayout(top);first->setContentsMargins(0,0,0,0);outer->addWidget(top);
   disclosure=new GlyphButton("right",top);disclosure->setFocusPolicy(Qt::NoFocus);disclosure->setCircular(true);
-  connect(disclosure,&QToolButton::clicked,this,[this]{if(onBody)onBody();});first->addWidget(disclosure);disclosure->hide();
+  connect(disclosure,&QToolButton::clicked,this,[this]{if(onDisclosure)onDisclosure();else if(onBody)onBody();});first->addWidget(disclosure);disclosure->hide();
   thumb=new SourceArtworkLabel(top);thumb->setFixedSize(scene?48:36,scene?27:22);thumb->setAlignment(Qt::AlignCenter);first->addWidget(thumb);
   name=new ElidedLabel(title,top);first->addWidget(name,1);
   name->installEventFilter(this);thumb->installEventFilter(this);top->installEventFilter(this);
@@ -115,7 +115,7 @@ public:
  }
  void setMotionDuration(int ms){duration=ms;if(!ms){rowHover.stop();hoverAmount=underMouse()?1:0;update();}if(!ms){secondaryReveal->finish();}for(auto*b:hoverButtons)static_cast<GlyphButton*>(b)->setMotionDuration(ms);for(auto*b:secondaryButtons)static_cast<GlyphButton*>(b)->setMotionDuration(ms);disclosure->setMotionDuration(ms);}
  bool motionActive()const{return secondaryReveal->moving();}
- void setExpanded(bool value){opened=value;secondaryReveal->setOpen(value&&!isScene,duration);}
+ void setExpanded(bool value){opened=value;secondaryReveal->setOpen(value&&(!isScene||!secondaryButtons.isEmpty()),duration);}
  void settleMotion(){secondaryReveal->finish();}
  bool expanded()const{return opened;}
  void addHover(const QString &tip,const QString&icon,std::function<void()> action,bool always=false){
@@ -178,7 +178,7 @@ protected:
    p.drawRoundedRect(indicator,barWidth/2,barWidth/2);
   }
   if(dropEdge){QPen pen(palette().color(QPalette::Highlight));pen.setWidth(2);p.setPen(pen);if(dropEdge==2){p.setBrush(Qt::NoBrush);p.drawRoundedRect(rowSurface.adjusted(1,1,-1,-1),radius,radius);}else{int y=dropEdge<0?1:height()-2;p.drawLine(outerLeft(),y,width()-2,y);}}
-  if(opened&&!isScene){auto divider=inkColor();divider.setAlpha(32);p.setPen(divider);const int y=secondaryReveal->geometry().top()-1;p.drawLine(outerLeft(),y,width()-5,y);}
+  if(opened&&!secondaryButtons.isEmpty()){auto divider=inkColor();divider.setAlpha(32);p.setPen(divider);const int y=secondaryReveal->geometry().top()-1;p.drawLine(outerLeft(),y,width()-5,y);}
  }
  void contextMenuEvent(QContextMenuEvent*e)override{if(onAppearance){onAppearance();e->accept();}else QWidget::contextMenuEvent(e);}
  void enterEvent(QEnterEvent *e)override{animateHover(1);for(auto*b:hoverButtons)static_cast<GlyphButton*>(b)->revealAction(true);update();QWidget::enterEvent(e);}

@@ -156,6 +156,7 @@ public:
  void finishMotion(){tabMotion.stop();if(fadingPage){fadingPage->setGraphicsEffect(nullptr);fadingPage=nullptr;}}
  void setMotionDuration(int ms){motionDuration=ms;for(auto*b:findChildren<QToolButton*>())if(auto*g=dynamic_cast<GlyphButton*>(b))g->setMotionDuration(ms);if(!ms)finishMotion();}
  bool motionActive()const{return tabMotion.state()==QAbstractAnimation::Running;}
+ void showTransform(){if(tabs->isTabEnabled(0))tabs->setCurrentIndex(0);}
  void setVisual(bool visual){tabs->setTabEnabled(0,visual);if(!visual&&tabs->currentIndex()==0)tabs->setCurrentIndex(1);}
  bool filtersVisible()const{return tabs->currentIndex()==1;}
  bool usageVisible()const{return tabs->currentIndex()==2;}

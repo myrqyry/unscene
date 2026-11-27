@@ -23,6 +23,11 @@
 #include "item-copy.hpp"
 #include "native-menu.hpp"
 #include "item-menu.hpp"
+#include "transition-policy.hpp"
+#include <QDialogButtonBox>
+#include <QComboBox>
+#include <QSpinBox>
+#include <QFormLayout>
 #include "item-state.hpp"
 #include "inspector.hpp"
 #include "inspector-motion.hpp"
@@ -138,6 +143,25 @@ template<class F> bool withItem(const QString&parent,int64_t id,const QString&ui
  auto*scene=obs_scene_from_source(p.get());if(!scene)scene=obs_group_from_source(p.get());if(!scene)return false;
  auto*i=obs_scene_find_sceneitem_by_id(scene,id);if(!i||uuid(obs_sceneitem_get_source(i))!=uid)return false;
  obs_sceneitem_addref(i);fn(i);obs_sceneitem_release(i);return true;
+}
+using Data=std::unique_ptr<obs_data_t,decltype(&obs_data_release)>;
+QByteArray itemTransitionJson(obs_sceneitem_t*i,bool show){
+ Data data(obs_sceneitem_transition_save(i,show),obs_data_release);return data?QByteArray(obs_data_get_json(data.get())):QByteArray();
+}
+void restoreItemTransition(const char*data){
+ auto o=QJsonDocument::fromJson(data).object();if(o["collection"].toString()!=currentCollection())return;
+ bool ok=false;auto id=o["item"].toString().toLongLong(&ok);if(!ok)return;
+ withItem(o["parent"].toString(),id,o["source"].toString(),[&](auto*i){
+  bool show=o["show"].toBool();if(itemTransitionJson(i,show)!=o["expected"].toString().toUtf8())return;
+  Data next(obs_data_create_from_json(o["next"].toString().toUtf8().constData()),obs_data_release);
+  if(next){obs_sceneitem_transition_load(i,next.get(),show);obs_frontend_save();}
+ });
+}
+SceneOverride readSceneOverride(obs_source_t*s,bool outgoing){
+ Data d(s?obs_source_get_private_settings(s):nullptr,obs_data_release);
+ if(!d)return {};
+ const auto name=outgoing?"unscene_out_transition":"transition",duration=outgoing?"unscene_out_duration":"transition_duration";
+ return {QString::fromUtf8(obs_data_get_string(d.get(),name)),transitionDuration(int(obs_data_get_int(d.get(),duration)),300)};
 }
 void restoreItemState(const char*data){
  auto u=ItemStateUndo::decode(data);if(!u||u->collection!=currentCollection())return;
@@ -1081,6 +1105,110 @@ class Dock : public QWidget {
    dirty=true;request();
   });
  }
+ struct TransitionChoice{QString label,id;};
+ std::optional<SceneOverride> transitionDialog(const QString&title,const QString&note,const QVector<TransitionChoice>&choices,const SceneOverride&current,const QString&noneLabel){
+  QDialog dialog(this);dialog.setWindowTitle(title);auto*layout=new QVBoxLayout(&dialog);
+  auto*description=new QLabel(note,&dialog);description->setWordWrap(true);layout->addWidget(description);
+  auto*form=new QFormLayout;auto*type=new QComboBox(&dialog);type->addItem(noneLabel,QString());
+  for(const auto&c:choices)type->addItem(c.label,c.id);
+  int index=type->findData(current.name);if(index<0&&!current.name.isEmpty()){type->addItem(current.name+" (unavailable)",current.name);index=type->count()-1;}
+  type->setCurrentIndex(qMax(0,index));auto*duration=new QSpinBox(&dialog);duration->setRange(50,20000);duration->setSuffix(" ms");duration->setSingleStep(50);duration->setValue(transitionDuration(current.duration,300));
+  duration->setEnabled(type->currentIndex()>0);connect(type,qOverload<int>(&QComboBox::currentIndexChanged),duration,[duration](int i){duration->setEnabled(i>0);});
+  form->addRow("Transition",type);form->addRow("Duration",duration);layout->addLayout(form);
+  auto*buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,&dialog);connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);layout->addWidget(buttons);
+  if(dialog.exec()!=QDialog::Accepted)return {};
+  return SceneOverride{type->currentData().toString(),duration->value()};
+ }
+ QVector<TransitionChoice> sceneTransitions(){
+  QVector<TransitionChoice> choices;obs_frontend_source_list list={};obs_frontend_get_transitions(&list);
+  for(size_t i=0;i<list.sources.num;i++){auto name=QString::fromUtf8(obs_source_get_name(list.sources.array[i]));choices.append({name,name});}
+  obs_frontend_source_list_free(&list);return choices;
+ }
+ void editSceneTransition(const Node&n,const QString&expected,bool outgoing){
+  if(!sameCollection(expected))return;
+  auto scene=source(n.uid);if(!scene||!obs_scene_from_source(scene.get()))return;
+  QScopedValueRollback<bool> guard(editingAppearance,true);
+  auto old=readSceneOverride(scene.get(),outgoing);auto choices=sceneTransitions();
+  auto next=transitionDialog(outgoing?"Scene out transition":"Scene in transition",
+   outgoing?"Unscene activation only (normal mode). Used when the destination has no native override. Studio Mode and other OBS controls are unchanged.":"Native OBS transition override when entering this scene.",choices,old,"Use default");
+  if(!next||!sameCollection(expected)||obs_source_removed(scene.get()))return;
+  if(!next->name.isEmpty()&&std::none_of(choices.begin(),choices.end(),[&](const auto&c){return c.id==next->name;}))return;
+  Data d(obs_source_get_private_settings(scene.get()),obs_data_release);
+  obs_data_set_string(d.get(),outgoing?"unscene_out_transition":"transition",next->name.toUtf8().constData());
+  obs_data_set_int(d.get(),outgoing?"unscene_out_duration":"transition_duration",next->duration);
+  changedScene(n.key);
+ }
+ void activateScene(const Node&n){
+  if(!sameCollection(collection))return;
+  auto dest=source(n.uid);if(!dest||!obs_scene_from_source(dest.get()))return;
+  if(obs_frontend_preview_program_mode_active()){obs_frontend_set_current_preview_scene(dest.get());request();return;}
+  Source live(obs_frontend_get_current_scene(),obs_source_release);
+  if(!live||live.get()==dest.get())return;
+  auto incoming=readSceneOverride(dest.get(),false),outgoing=readSceneOverride(live.get(),true);
+  auto choice=chooseSceneOverride(incoming,outgoing);
+  auto available=sceneTransitions();
+  if(incoming.name.isEmpty()&&!choice.name.isEmpty()&&std::any_of(available.begin(),available.end(),[&](const auto&c){return c.id==choice.name;})){
+   // OBS consumes the native destination override synchronously on the GUI thread.
+   // Restore exact user-value presence immediately, and persist the restored settings.
+   Data d(obs_source_get_private_settings(dest.get()),obs_data_release);
+   bool hadName=obs_data_has_user_value(d.get(),"transition"),hadDuration=obs_data_has_user_value(d.get(),"transition_duration");
+   auto name=QByteArray(obs_data_get_string(d.get(),"transition"));auto duration=obs_data_get_int(d.get(),"transition_duration");
+   obs_data_set_string(d.get(),"transition",choice.name.toUtf8().constData());obs_data_set_int(d.get(),"transition_duration",choice.duration);
+   obs_frontend_set_current_scene(dest.get());
+   if(hadName)obs_data_set_string(d.get(),"transition",name.constData());else obs_data_unset_user_value(d.get(),"transition");
+   if(hadDuration)obs_data_set_int(d.get(),"transition_duration",duration);else obs_data_unset_user_value(d.get(),"transition_duration");
+   obs_frontend_save();
+  }else obs_frontend_set_current_scene(dest.get());
+  request();
+ }
+ void editItemTransition(const Node&n,const QString&expected,bool show){
+  if(!sameCollection(expected))return;
+  SceneOverride current;QByteArray before;
+  if(!withItem(n.parent,n.id,n.uid,[&](auto*i){
+   auto*t=obs_sceneitem_get_transition(i,show);if(t)current.name=QString::fromUtf8(obs_source_get_id(t));
+   current.duration=transitionDuration(int(obs_sceneitem_get_transition_duration(i,show)),obs_frontend_get_transition_duration());before=itemTransitionJson(i,show);
+  }))return;
+  QScopedValueRollback<bool> guard(editingAppearance,true);
+  QVector<TransitionChoice> choices;const char*id=nullptr;
+  for(size_t i=0;obs_enum_transition_types(i,&id);++i){auto name=obs_source_get_display_name(id);if(name&&*name)choices.append({QString::fromUtf8(name),QString::fromUtf8(id)});}
+  auto next=transitionDialog(show?"Source in transition":"Source out transition","Applied when this source instance becomes visible or hidden.",choices,current,"None");
+  if(!next||!sameCollection(expected))return;
+  if(!next->name.isEmpty()&&std::none_of(choices.begin(),choices.end(),[&](const auto&c){return c.id==next->name;}))return;
+  withItem(n.parent,n.id,n.uid,[&](auto*i){
+   if(itemTransitionJson(i,show)!=before)return;
+   auto*t=obs_sceneitem_get_transition(i,show);
+   if(next->name.isEmpty())obs_sceneitem_set_transition(i,show,nullptr);
+   else if(!t||next->name!=QString::fromUtf8(obs_source_get_id(t))){
+    Source created(obs_source_create_private(next->name.toUtf8().constData(),(n.title+(show?" In":" Out")).toUtf8().constData(),nullptr),obs_source_release);
+    if(!created)return;obs_sceneitem_set_transition(i,show,created.get());
+   }
+   obs_sceneitem_set_transition_duration(i,show,next->name.isEmpty()?0:next->duration);
+   auto after=itemTransitionJson(i,show);if(before!=after){
+    auto payload=[&](const QByteArray&from,const QByteArray&to){return QJsonDocument(QJsonObject{{"collection",expected},{"parent",n.parent},{"source",n.uid},{"item",QString::number(n.id)},{"show",show},{"expected",QString::fromUtf8(from)},{"next",QString::fromUtf8(to)}}).toJson(QJsonDocument::Compact);};
+    auto undo=payload(after,before),redo=payload(before,after),label=(QString("Unscene: ")+(show?"show":"hide")+" transition "+n.title).toUtf8();
+    obs_frontend_add_undo_redo_action(label.constData(),restoreItemTransition,restoreItemTransition,undo.constData(),redo.constData(),false);changedScene(n.key);
+   }
+  });
+ }
+ void itemTransitionProperties(const Node&n,const QString&expected,bool show){
+  if(!sameCollection(expected))return;
+  Source transition(nullptr,obs_source_release);
+  withItem(n.parent,n.id,n.uid,[&](auto*i){transition.reset(obs_source_get_ref(obs_sceneitem_get_transition(i,show)));});
+  if(transition&&obs_source_configurable(transition.get()))obs_frontend_open_source_properties(transition.get());
+ }
+ void queueTransition(const Node&n,bool show){
+  auto expected=collection;QTimer::singleShot(0,this,[this,n,expected,show]{
+   if(n.scene)editSceneTransition(n,expected,!show);else editItemTransition(n,expected,show);
+  });
+ }
+ void queueBlend(const Node&n){
+  auto expected=collection;auto pos=QCursor::pos();
+  QTimer::singleShot(0,this,[this,n,expected,pos]{
+   if(!sameCollection(expected))return;QMenu root(this);
+   if(!withItem(n.parent,n.id,n.uid,[&](auto*i){choiceMenu(&root,"Blending mode",blendChoices(),obs_sceneitem_get_blending_mode(i),[this,n,expected](int v){changeItemState(n,expected,"blend",v);});choiceMenu(&root,"Blending method",blendMethodChoices(),obs_sceneitem_get_blending_method(i),[this,n,expected](int v){changeItemState(n,expected,"blend-method",v);});}))return;
+   root.exec(pos);
+  });
+ }
  void addTargetActions(QMenu&menu,const Node&n,const QString&expected){
   auto src=source(n.uid);if(!src||obs_source_removed(src.get()))return;
   auto addSourceAction=[&](QMenu*where,const QString&label,std::function<void(obs_source_t*)> fn){
@@ -1099,6 +1227,7 @@ class Dock : public QWidget {
    addSourceAction(&menu,n.scene?"Save scene screenshot":"Save source screenshot",[](auto*s){obs_frontend_take_source_screenshot(s);});
   }
   if(n.scene){
+   for(bool show:{true,false}){auto*a=menu.addAction(show?"In transition…":"Out transition (Unscene)…");connect(a,&QAction::triggered,this,[this,n,show]{queueTransition(n,show);});}
    addSourceAction(&menu,"Filters",[](auto*s){obs_frontend_open_source_filters(s);});
    return;
   }
@@ -1116,6 +1245,10 @@ class Dock : public QWidget {
     auto*a=order->addAction(c.label);a->setEnabled(!obs_sceneitem_locked(i));connect(a,&QAction::triggered,this,[this,n,expected,c]{if(sameCollection(expected))moveItem(n,c.value);});
    }
    if(!(flags&OBS_SOURCE_VIDEO))return;
+   for(bool show:{true,false}){
+    auto*a=menu.addAction(show?"In transition…":"Out transition…");connect(a,&QAction::triggered,this,[this,n,show]{queueTransition(n,show);});
+    auto*t=obs_sceneitem_get_transition(i,show);if(t&&obs_source_configurable(t)){auto*p=menu.addAction(show?"In transition properties…":"Out transition properties…");connect(p,&QAction::triggered,this,[this,n,expected,show]{QTimer::singleShot(0,this,[this,n,expected,show]{itemTransitionProperties(n,expected,show);});});}
+   }
    choiceMenu(&menu,"Scale filtering",scaleChoices(),obs_sceneitem_get_scale_filter(i),[this,n,expected](int v){changeItemState(n,expected,"scale",v);});
    choiceMenu(&menu,"Blending mode",blendChoices(),obs_sceneitem_get_blending_mode(i),[this,n,expected](int v){changeItemState(n,expected,"blend",v);});
    choiceMenu(&menu,"Blending method",blendMethodChoices(),obs_sceneitem_get_blending_method(i),[this,n,expected](int v){changeItemState(n,expected,"blend-method",v);});
@@ -1239,8 +1372,8 @@ class Dock : public QWidget {
  void request(){if(pending||stopping)return;pending=true;QTimer::singleShot(0,this,[this]{pending=false;refresh();});}
  void toggle(const Node &n){
   animateStructure=true;
-  if((n.scene||n.group||n.folder)&&!searching()){if(opened.contains(n.key))opened.remove(n.key);else opened.insert(n.key);saveOpened();}
-  if(!n.scene&&!n.folder){selected=selected==n.key?QString():n.key;if(!selected.isEmpty())inspect(n,false);}
+  if((n.group||n.folder)&&!searching()){if(opened.contains(n.key))opened.remove(n.key);else opened.insert(n.key);saveOpened();}
+  if(!n.folder){selected=selected==n.key?QString():n.key;if(!n.scene&&!selected.isEmpty())inspect(n,false);}
   dirty=true;request();
  }
  void render(const QVector<Node>&nodes){
@@ -1316,6 +1449,7 @@ class Dock : public QWidget {
    if(fresh){
    r->onAppearance=[this,n]{if(n.folder){auto pos=QCursor::pos();QTimer::singleShot(0,this,[this,n,pos]{folderMenu(n,pos);});}else queueNativeContext(n);};
    r->onBody=[this,n]{toggle(n);};
+   if(n.scene)r->onDisclosure=[this,n]{if(searching())return;animateStructure=true;if(opened.contains(n.key))opened.remove(n.key);else opened.insert(n.key);saveOpened();dirty=true;request();};
    if(!n.locked){
     r->onDragMove=[this,n](QPoint pos){return dragMove(n,pos);};
     r->onDrop=[this,n](QPoint pos){finishDrag(n,pos);};
@@ -1324,14 +1458,21 @@ class Dock : public QWidget {
    if(n.folder){
     r->addHover("Folder actions","more",[this,n]{auto pos=QCursor::pos();QTimer::singleShot(0,this,[this,n,pos]{folderMenu(n,pos);});});
    }else if(n.scene){
-    r->addSceneActivation(n.program,obs_frontend_preview_program_mode_active(),n.preview,[this,n]{auto s=source(n.uid);if(!s||!obs_scene_from_source(s.get()))return;if(obs_frontend_preview_program_mode_active())obs_frontend_set_current_preview_scene(s.get());else obs_frontend_set_current_scene(s.get());request();});
+    r->addSceneActivation(n.program,obs_frontend_preview_program_mode_active(),n.preview,[this,n]{activateScene(n);});
     r->addHover("Add source","plus",[this,n]{QTimer::singleShot(0,this,[this,n]{addSource(n);});});
     r->addHover("More actions","more",[this,n]{queueContext(n);});
+    r->addSecondary("Scene in transition","transition-in",[this,n]{queueTransition(n,true);});
+    r->addSecondary("Scene out transition (Unscene activation)","transition-out",[this,n]{queueTransition(n,false);});
    }else{
     r->addHover("Properties","properties",[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_properties(s.get());});
     r->addHover("Filters","filters",[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_filters(s.get());});
     r->addHover(n.visible?"Hide source":"Show source",n.visible?"eye":"eye-off",[this,n]{changeItemState(n,collection,"visibility");},!n.visible);
-    r->addSecondary("Inspector","inspector",[this,n]{inspect(n,true);});
+    r->addSecondary(n.video?"Transform inspector":"Inspector",n.video?"transform":"inspector",[this,n]{inspect(n,true);if(inspected&&inspected->key==n.key&&n.video)inspector->showTransform();});
+    if(n.video){
+     r->addSecondary("In transition","transition-in",[this,n]{queueTransition(n,true);});
+     r->addSecondary("Out transition","transition-out",[this,n]{queueTransition(n,false);});
+     r->addSecondary("Blending mode / method","blend",[this,n]{queueBlend(n);});
+    }
     r->addSecondary(n.locked?"Unlock source":"Lock source",n.locked?"lock":"unlock",[this,n]{changeItemState(n,collection,"locked");});
     r->addSecondary("Move up","up",[this,n]{moveItem(n,OBS_ORDER_MOVE_UP);});
     r->addSecondary("Move down","down",[this,n]{moveItem(n,OBS_ORDER_MOVE_DOWN);});
@@ -1339,7 +1480,7 @@ class Dock : public QWidget {
     if(n.audio)r->addSecondary("Toggle mute",n.muted?"mute":"volume",[n]{auto s=source(n.uid);if(s)obs_source_set_muted(s.get(),!obs_source_muted(s.get()));});
    }
    }
-   r->setMotionDuration(motionDuration);
+   r->setExpanded(expanded);r->setMotionDuration(motionDuration);
    if(animate&&!created)insertExitsBefore(n.key);
    rows->addWidget(shell);
    if(animate&&created){shell->setOpen(false,0);shell->setOpen(true,motionDuration);}
