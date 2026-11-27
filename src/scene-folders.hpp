@@ -14,6 +14,7 @@ struct SceneFolder { QString id,name,parent; };
 class SceneFolders {
  QVector<SceneFolder> entries;
  QMap<QString,QString> membership;
+ QMap<QString,QStringList> sceneOrder;
  int index(const QString&id)const{
   for(int i=0;i<entries.size();++i)if(entries[i].id==id)return i;
   return -1;
@@ -46,6 +47,16 @@ public:
    auto id=order[i++];for(const auto&candidate:old)if(candidate.id==id){f=candidate;break;}
   }
   return true;
+ }
+ QStringList orderedScenes(const QString&parent,const QStringList&native)const{
+  QStringList result;QSet<QString> seen;
+  for(const auto&id:sceneOrder.value(parent))if(native.contains(id)&&!seen.contains(id)){result.append(id);seen.insert(id);}
+  for(const auto&id:native)if(!seen.contains(id)){result.append(id);seen.insert(id);}
+  return result;
+ }
+ bool reorderScenes(const QString&parent,const QStringList&order){
+  if(!validParent(parent)||order.contains(QString())||QSet<QString>(order.begin(),order.end()).size()!=order.size())return false;
+  if(order.isEmpty())sceneOrder.remove(parent);else sceneOrder[parent]=order;return true;
  }
  QString rootForFolder(const QString&id)const{
   auto current=id;
@@ -88,10 +99,11 @@ public:
  }
  bool moveScene(const QString&id,const QString&parent){
   if(id.isEmpty()||!validParent(parent))return false;
+  auto old=parentOfScene(id);if(old!=parent&&sceneOrder.contains(old)){sceneOrder[old].removeAll(id);if(sceneOrder[old].isEmpty())sceneOrder.remove(old);}
   if(parent.isEmpty())membership.remove(id);else membership[id]=parent;return true;
  }
  bool remove(const QString&id){
-  int i=index(id);if(i<0)return false;auto parent=entries[i].parent;entries.removeAt(i);
+  int i=index(id);if(i<0)return false;auto parent=entries[i].parent;entries.removeAt(i);sceneOrder.remove(id);
   for(auto&f:entries)if(f.parent==id)f.parent=parent;
   for(auto it=membership.begin();it!=membership.end();){
    if(it.value()!=id){++it;continue;}
@@ -99,10 +111,12 @@ public:
   }return true;
  }
  QByteArray encode()const{
-  QJsonArray folders;QJsonObject scenes;
+  QJsonArray folders;QJsonObject scenes,order;
   for(const auto&f:entries)folders.append(QJsonObject{{"id",f.id},{"name",f.name},{"parent",f.parent}});
   for(auto it=membership.cbegin();it!=membership.cend();++it)scenes.insert(it.key(),it.value());
-  return QJsonDocument(QJsonObject{{"folders",folders},{"scenes",scenes}}).toJson(QJsonDocument::Compact);
+  for(auto it=sceneOrder.cbegin();it!=sceneOrder.cend();++it)order.insert(it.key(),QJsonArray::fromStringList(it.value()));
+  QJsonObject result{{"folders",folders},{"scenes",scenes}};if(!order.isEmpty())result.insert("sceneOrder",order);
+  return QJsonDocument(result).toJson(QJsonDocument::Compact);
  }
  static SceneFolders decode(const QByteArray&bytes){
   SceneFolders result;auto obj=QJsonDocument::fromJson(bytes).object();auto folders=obj["folders"].toArray();
@@ -114,6 +128,11 @@ public:
   if(!result.validTree())return {};
   auto scenes=obj["scenes"].toObject();
   for(auto it=scenes.begin();it!=scenes.end();++it)if(result.contains(it.value().toString()))result.moveScene(it.key(),it.value().toString());
+  auto orders=obj["sceneOrder"].toObject();
+  for(auto it=orders.begin();it!=orders.end();++it)if(it.value().isArray()){
+   QStringList ids;for(auto v:it.value().toArray())ids.append(v.toString());
+   result.reorderScenes(it.key(),ids);
+  }
   return result;
  }
 };

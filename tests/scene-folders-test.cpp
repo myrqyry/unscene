@@ -56,5 +56,10 @@ int main(int argc,char**argv){
  CHECK(!history.canRedo());
  history.clear();CHECK(!history.canUndo()&&!history.canRedo());
  CHECK(SceneFolders::decode(R"({"folders":[{"id":"folder:a","name":"a","parent":"folder:b"},{"id":"folder:b","name":"b","parent":"folder:a"}],"scenes":{"s":"folder:a"}})").folders().isEmpty());
+ CHECK(f.orderedScenes(a,{"s1","s2","s3"})==QStringList({"s1","s2","s3"}));
+ CHECK(f.reorderScenes(a,{"s3","s1","s2"}));
+ CHECK(SceneFolders::decode(f.encode()).orderedScenes(a,{"s1","s2","s4","s3"})==QStringList({"s3","s1","s2","s4"}));
+ CHECK(!f.reorderScenes(a,{"s1","s1"}));
+ CHECK(f.orderedScenes(a,{"s2","s3"})==QStringList({"s3","s2"}));
  return 0;
 }

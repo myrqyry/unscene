@@ -20,5 +20,11 @@ int main(int argc,char**argv){
  CHECK(thumbnailSize(Density::Compact,true)==QSize(20,20));CHECK(thumbnailSize(Density::Large,true).width()>thumbnailSize(Density::Normal,true).width());
  CHECK(thumbnailSize(Density::Large,false).width()>thumbnailSize(Density::Normal,false).width());
  CHECK(store.motionDuration()==150);CHECK(store.saveMotion(0));{NavigationStore reloaded(path);CHECK(reloaded.motionDuration()==0);CHECK(reloaded.saveMotion(90));} CHECK(store.motionDuration()==90);
+ CHECK(!store.searchAllTabs());
+ CHECK(store.saveSearchAllTabs(true));
+ CHECK(store.saveFavorites("A",{"a","b"}));
+ CHECK(store.saveFavorites("B",{"c"}));
+ {NavigationStore again(path);CHECK(again.searchAllTabs());CHECK(again.favorites("A")==QSet<QString>({"a","b"}));CHECK(again.favorites("B")==QSet<QString>({"c"}));}
+ CHECK(favoriteFirst(QStringList({"c","b","a","d"}),QSet<QString>({"a","c"}))==QStringList({"c","a","b","d"}));
  return 0;
 }

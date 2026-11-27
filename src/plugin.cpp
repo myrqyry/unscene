@@ -560,7 +560,9 @@ class Dock : public QWidget {
  GlyphButton *collapse,*expand;
  QString query;
  bool dirty=true;
- QSet<QString> sceneKeys,snapshotKeys;
+ QSet<QString> sceneKeys,snapshotKeys,favorites;
+ QHash<QString,int> tabCounts;
+ bool allTabsSearch=navigation.searchAllTabs();
  struct RowEntry{Node node;Row*row;Reveal*shell;};
  QHash<QString,RowEntry> rowEntries;
  QVector<QString> rowOrder;
@@ -580,7 +582,7 @@ class Dock : public QWidget {
   const int edge=qBound(24,fontMetrics().height()*3,64);
   return dragScrollStep(view->rect(),view->mapFromGlobal(dragPosition),edge);
  }
- struct OrganizationDrop{QString parent;int tab=-1;QString row;};
+ struct OrganizationDrop{QString parent;int tab=-1;QString row;int edge=2;};
  std::optional<OrganizationDrop> organizationTarget(const Node&from,QPoint pos){
   if(!(from.scene||from.folder)||searching()||!sameCollection(collection))return {};
   auto valid=[&](const QString&id){
@@ -591,7 +593,11 @@ class Dock : public QWidget {
   if(tab>=0){auto id=sceneTabs->tabData(tab).toString();if(valid(id))return OrganizationDrop{id,tab,{}};return {};}
   if(!scroll->viewport()->rect().contains(scroll->viewport()->mapFromGlobal(pos)))return {};
   for(auto&entry:rowEntries){auto&n=entry.node;auto*r=entry.row;
-   if(n.folder&&r->isVisible()&&r->rect().contains(r->mapFromGlobal(pos))&&valid(n.key))return OrganizationDrop{n.key,-1,n.key};
+   auto local=r->mapFromGlobal(pos);
+   if(!r->isVisible()||!r->rect().contains(local))continue;
+   if(n.folder&&valid(n.key))return OrganizationDrop{n.key,-1,n.key};
+   if(from.scene&&n.scene&&from.uid!=n.uid&&folders.parentOfScene(from.uid)==folders.parentOfScene(n.uid)&&favorites.contains(from.uid)==favorites.contains(n.uid))
+    return OrganizationDrop{folders.parentOfScene(n.uid),-1,n.key,local.y()<r->height()/2?-1:1};
   }
   return {};
  }
@@ -601,7 +607,7 @@ class Dock : public QWidget {
    sceneTabs->setDropTab(target?target->tab:-1);
    Row*next=target&&!target->row.isEmpty()?rowEntries.value(target->row).row:nullptr;
    if(dropMarker&&dropMarker!=next)dropMarker->setDropIndicator(0);
-   dropMarker=next;if(next)next->setDropIndicator(2);
+   dropMarker=next;if(next)next->setDropIndicator(target->edge);
    return target.has_value();
   }
   auto target=dropTarget(from,pos);
@@ -654,7 +660,10 @@ class Dock : public QWidget {
  void finishDrag(const Node&from,QPoint pos){
   if(from.scene||from.folder){
    auto expected=dragCollection;auto target=organizationTarget(from,pos);bool valid=dragKey==from.key&&sameCollection(expected);clearDrag();
-   if(valid&&target)moveOrganization(from,target->parent,expected);
+   if(valid&&target){
+    if(target->edge==2)moveOrganization(from,target->parent,expected);
+    else reorderScene(from.uid,target->row,target->edge<0,expected);
+   }
    return;
   }
   auto expected=dragCollection;auto target=dropTarget(from,pos);bool valid=dragKey==from.key&&sameCollection(expected);clearDrag();
@@ -729,19 +738,26 @@ class Dock : public QWidget {
   if(!folders.validTab(activeTab)){activeTab.clear();folderStore.saveTab(collection,activeTab);}
   QVector<QPair<QString,QString>> wanted{{{},QStringLiteral("Unfiled")}};
   for(const auto&f:folders.folders())if(f.parent.isEmpty())wanted.append({f.id,f.name});
+  auto label=[&](const QPair<QString,QString>&t){return QString("%1  %2").arg(QString(t.second).replace("&","&&")).arg(tabCounts.value(t.first));};
   QSignalBlocker block(sceneTabs);
   bool rebuild=sceneTabs->count()!=wanted.size();
-  for(int i=0;!rebuild&&i<wanted.size();++i)rebuild=sceneTabs->tabData(i).toString()!=wanted[i].first||sceneTabs->tabText(i)!=QString(wanted[i].second).replace("&","&&");
+  for(int i=0;!rebuild&&i<wanted.size();++i)rebuild=sceneTabs->tabData(i).toString()!=wanted[i].first||sceneTabs->tabText(i)!=label(wanted[i]);
   if(rebuild){while(sceneTabs->count())sceneTabs->removeTab(0);
-   for(const auto&t:wanted){int i=sceneTabs->addTab(QString(t.second).replace("&","&&"));sceneTabs->setTabData(i,t.first);}
+   for(const auto&t:wanted){int i=sceneTabs->addTab(label(t));sceneTabs->setTabData(i,t.first);}
   }
   for(int i=0;i<wanted.size();++i){
    auto id=wanted[i].first;auto title=wanted[i].second;bool live=id==programTab,preview=id==previewTab;
-   QString tip=title;if(live)tip+=" — contains live scene";if(preview)tip+=" — contains preview scene";
+   QString tip=QString("%1 — %2 scene(s)").arg(title).arg(tabCounts.value(id));if(live)tip+=" — contains live scene";if(preview)tip+=" — contains preview scene";
    sceneTabs->setTabToolTip(i,tip);
-   QIcon icon;
-   if(live)icon=QIcon(glyphPixmap("live",sceneTabs->palette().color(QPalette::Text),16,sceneTabs->devicePixelRatioF()));
-   else if(!id.isEmpty()){auto appearance=appearances.load(id);auto art=appearancePixmap(appearance,sceneTabs->palette(),QSize(16,16));if(!art.isNull())icon=QIcon(art);}
+   QIcon icon;auto appearance=appearances.load(id);
+   auto art=live?glyphPixmap("live",sceneTabs->palette().color(QPalette::Text),16,sceneTabs->devicePixelRatioF()):appearancePixmap(appearance,sceneTabs->palette(),QSize(16,16));
+   if(appearance.color.isValid()){
+    if(art.isNull()){art=QPixmap(16,16);art.fill(Qt::transparent);}
+    QPainter p(&art);p.setRenderHint(QPainter::Antialiasing);auto r=QRectF(0,0,art.deviceIndependentSize().width(),art.deviceIndependentSize().height());
+    p.setPen(QPen(sceneTabs->palette().color(QPalette::Base),1));p.setBrush(appearance.color);
+    p.drawEllipse(live||appearance.mode!="auto"?r.adjusted(9,9,-1,-1):r.adjusted(3,3,-3,-3));
+   }
+   if(!art.isNull())icon=QIcon(art);
    sceneTabs->setTabIcon(i,icon);
    if(id==activeTab)sceneTabs->setCurrentIndex(i);
   }
@@ -751,7 +767,39 @@ class Dock : public QWidget {
   QMenu menu(this);for(int i=0;i<sceneTabs->count();++i){
    auto id=sceneTabs->tabData(i).toString();auto*a=menu.addAction(sceneTabs->tabIcon(i),sceneTabs->tabText(i));
    a->setCheckable(true);a->setChecked(id==activeTab);connect(a,&QAction::triggered,this,[this,id]{selectTab(id);});
-  }menu.exec(anchor->mapToGlobal(QPoint(0,anchor->height())));
+  }
+  if(!favorites.isEmpty()){
+   auto*sub=menu.addMenu("Pinned scenes");obs_frontend_source_list list={};obs_frontend_get_scenes(&list);
+   for(size_t i=0;i<list.sources.num;i++){auto*s=list.sources.array[i];auto id=uuid(s);if(!favorites.contains(id))continue;
+    auto*a=sub->addAction(QString::fromUtf8(obs_source_get_name(s)));auto expected=collection;connect(a,&QAction::triggered,this,[this,id,expected]{if(sameCollection(expected))jumpToScene(id);});
+   }obs_frontend_source_list_free(&list);
+   if(sub->actions().isEmpty())sub->setEnabled(false);
+  }
+  menu.exec(anchor->mapToGlobal(QPoint(0,anchor->height())));
+ }
+ void jumpToScene(const QString&id){
+  if(!sameCollection(collection))return;
+  auto s=source(id);if(!s||obs_source_removed(s.get())||!obs_scene_from_source(s.get()))return;
+  search->clear();selectTab(folders.rootForScene(id));
+  for(auto p=folders.parentOfScene(id);!p.isEmpty();p=folders.parentOfFolder(p))opened.insert(p);
+  selected=id;saveOpened();dirty=true;request();
+  QTimer::singleShot(0,this,[this,id]{auto it=rowEntries.find(id);if(it!=rowEntries.end())scroll->ensureWidgetVisible(it->row);});
+ }
+ void toggleFavorite(const QString&id,const QString&expected){
+  if(!sameCollection(expected))return;
+  auto next=favorites;if(next.contains(id))next.remove(id);else next.insert(id);
+  if(navigation.saveFavorites(expected,next)){favorites=next;dirty=true;request();}
+ }
+ QStringList siblingScenes(const QString&parent){
+  obs_frontend_source_list list={};obs_frontend_get_scenes(&list);QStringList ids;
+  for(size_t i=0;i<list.sources.num;i++){auto id=uuid(list.sources.array[i]);if(folders.parentOfScene(id)==parent)ids.append(id);}
+  obs_frontend_source_list_free(&list);return folders.orderedScenes(parent,ids);
+ }
+ void reorderScene(const QString&id,const QString&target,bool before,const QString&expected){
+  if(!sameCollection(expected)||id==target||folders.parentOfScene(id)!=folders.parentOfScene(target)||favorites.contains(id)!=favorites.contains(target))return;
+  auto parent=folders.parentOfScene(id);auto ids=siblingScenes(parent);if(!ids.contains(id)||!ids.contains(target))return;
+  ids.removeAll(id);auto index=ids.indexOf(target);ids.insert(index+(before?0:1),id);
+  auto next=folders;if(next.reorderScenes(parent,ids))saveFolders(next,expected);
  }
  void saveTabSelection(const QString&id){activeTab=id;folderStore.saveTab(collection,id);tabsDirty=true;dirty=true;request();}
  bool saveFolders(const SceneFolders&next,const QString&expected,bool record=true){
@@ -784,6 +832,27 @@ class Dock : public QWidget {
    saveOpened();
   }
  }
+ void createScene(const QString&parent,const QString&expected,const QString&duplicate={}){
+  if(!sameCollection(expected)||(!parent.isEmpty()&&!folders.contains(parent)))return;
+  QScopedValueRollback<bool> guard(editingAppearance,true);
+  auto original=duplicate.isEmpty()?Source(nullptr,obs_source_release):source(duplicate);
+  if(!duplicate.isEmpty()&&(!original||!obs_scene_from_source(original.get())||obs_source_removed(original.get())))return;
+  QString base=original?QString::fromUtf8(obs_source_get_name(original.get()))+" copy":QStringLiteral("Scene");
+  QString suggested=base;for(int i=2;;++i){
+   Source exists(obs_get_source_by_name(suggested.toUtf8().constData()),obs_source_release);if(!exists)break;
+   suggested=base+" "+QString::number(i);
+  }
+  bool ok=false;auto name=QInputDialog::getText(this,original?"Duplicate scene (shared sources)":"New scene","Scene name",QLineEdit::Normal,suggested,&ok).trimmed();
+  if(!ok||name.isEmpty()||!sameCollection(expected)||(!parent.isEmpty()&&!folders.contains(parent)))return;
+  Source exists(obs_get_source_by_name(name.toUtf8().constData()),obs_source_release);
+  if(exists){QMessageBox::warning(this,"Unscene","That scene or source name is already in use.");return;}
+  if(original&&obs_source_removed(original.get()))return;
+  std::unique_ptr<obs_scene_t,decltype(&obs_scene_release)> scene(original?obs_scene_duplicate(obs_scene_from_source(original.get()),name.toUtf8().constData(),OBS_SCENE_DUP_REFS):obs_scene_create(name.toUtf8().constData()),obs_scene_release);
+  if(!scene){QMessageBox::warning(this,"Unscene","OBS could not create the scene.");return;}
+  auto id=uuid(obs_scene_get_source(scene.get()));
+  auto next=folders;if(next.moveScene(id,parent))saveFolders(next,expected);
+  obs_frontend_save();dirty=true;tabsDirty=true;request();
+ }
  void newFolder(const QString&parent,const QString&expected){
   if(!sameCollection(expected))return;
   QScopedValueRollback<bool> guard(editingAppearance,true);
@@ -808,6 +877,7 @@ class Dock : public QWidget {
  void folderMenu(const Node&n,const QPoint&pos){
   auto expected=collection;if(!sameCollection(expected)||!folders.contains(n.key))return;
   QMenu menu(this);
+  auto*newScene=menu.addAction("New scene here…");connect(newScene,&QAction::triggered,this,[this,n,expected]{QTimer::singleShot(0,this,[this,n,expected]{createScene(n.key,expected);});});
   auto*create=menu.addAction("New subfolder…");
   connect(create,&QAction::triggered,this,[this,n,expected]{QTimer::singleShot(0,this,[this,n,expected]{newFolder(n.key,expected);});});
   moveFolderMenu(menu,n,expected);
@@ -847,6 +917,10 @@ class Dock : public QWidget {
  }
  void densityMenu(QWidget*anchor){
   QMenu menu(this);
+  auto*newScene=menu.addAction("New scene in this tab…");auto tab=activeTab,scope=collection;
+  connect(newScene,&QAction::triggered,this,[this,tab,scope]{QTimer::singleShot(0,this,[this,tab,scope]{createScene(tab,scope);});});
+  auto*globalSearch=menu.addAction("Search all tabs");globalSearch->setCheckable(true);globalSearch->setChecked(allTabsSearch);
+  connect(globalSearch,&QAction::toggled,this,[this](bool on){allTabsSearch=on;navigation.saveSearchAllTabs(on);search->setPlaceholderText(on?"Find across tabs…":"Find in tab…");dirty=true;request();});
   auto*folder=menu.addAction("New scene tab…");auto expected=collection;connect(folder,&QAction::triggered,this,[this,expected]{QTimer::singleShot(0,this,[this,expected]{newFolder({},expected);});});
   addOrganizationHistory(menu);
   menu.addSeparator();
@@ -1295,7 +1369,15 @@ class Dock : public QWidget {
    menu.addSeparator();
   }
   if(n.scene){
+   auto*duplicateScene=menu.addAction("Duplicate scene (shared sources)…");connect(duplicateScene,&QAction::triggered,this,[this,n,expected]{QTimer::singleShot(0,this,[this,n,expected]{createScene(folders.parentOfScene(n.uid),expected,n.uid);});});
+   auto*pin=menu.addAction(favorites.contains(n.uid)?"Unpin scene":"Pin scene");connect(pin,&QAction::triggered,this,[this,n,expected]{toggleFavorite(n.uid,expected);});
+   if(searching()&&allTabsSearch){auto*jump=menu.addAction("Go to scene tab");connect(jump,&QAction::triggered,this,[this,n]{jumpToScene(n.uid);});}
    moveFolderMenu(menu,n,expected);
+   auto ids=favoriteFirst(siblingScenes(folders.parentOfScene(n.uid)),favorites);int index=ids.indexOf(n.uid);
+   for(int delta:{-1,1}){auto*a=menu.addAction(delta<0?"Move scene up in folder":"Move scene down in folder");
+    const int target=index+delta;bool valid=index>=0&&target>=0&&target<ids.size()&&favorites.contains(ids[target])==favorites.contains(n.uid);
+    a->setEnabled(valid);if(valid){auto other=ids[target];connect(a,&QAction::triggered,this,[this,n,other,delta,expected]{reorderScene(n.uid,other,delta<0,expected);});}
+   }
    auto*add=menu.addAction("Add source…");connect(add,&QAction::triggered,this,[this,n]{QTimer::singleShot(0,this,[this,n]{addSource(n);});});
    auto*ref=menu.addAction("Paste (reference)");ref->setEnabled(canPaste(false));
    connect(ref,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))QTimer::singleShot(0,this,[this,n,expected]{if(sameCollection(expected))pasteSource(n,false);});});
@@ -1435,7 +1517,7 @@ class Dock : public QWidget {
    r->thumb->setFixedSize(thumbnailSize(density(n),n.scene));
    r->setSelected(n.program||n.preview||expanded);
    r->setSourceVisible(n.visible);
-   r->setStatus(!n.program&&n.preview?"PREVIEW":"");
+   r->setStatus(!n.program&&n.preview?(favorites.contains(n.uid)&&n.scene?"★ PREVIEW":"PREVIEW"):n.scene&&favorites.contains(n.uid)?"★":"");
    r->thumb->setPixmap(sourceArtwork(n,r));
    labels.insert(n.key,r->thumb);keys.insert(n.uid,n.key);
    if(density(n)!=Density::Compact){snapshotKeys.insert(n.key);}
@@ -1528,7 +1610,11 @@ public:
   connect(sceneTabs,&QTabBar::currentChanged,this,[this](int i){if(i>=0)selectTab(sceneTabs->tabData(i).toString());});
   connect(sceneTabs,&QWidget::customContextMenuRequested,this,[this](const QPoint&p){
    int i=sceneTabs->tabAt(p);if(i<0)return;auto id=sceneTabs->tabData(i).toString();
-   if(id.isEmpty())return;Node n;n.folder=true;n.key=n.uid=id;n.title=folders.path(id);folderMenu(n,sceneTabs->mapToGlobal(p));
+   if(id.isEmpty()){
+    QMenu menu(this);auto expected=collection;auto*a=menu.addAction("New unfiled scene…");
+    connect(a,&QAction::triggered,this,[this,expected]{QTimer::singleShot(0,this,[this,expected]{createScene({},expected);});});
+    addOrganizationHistory(menu);menu.exec(sceneTabs->mapToGlobal(p));return;
+   }Node n;n.folder=true;n.key=n.uid=id;n.title=folders.path(id);folderMenu(n,sceneTabs->mapToGlobal(p));
   });
   auto*newFolderButton=new GlyphButton("plus",tabStrip);newFolderButton->setToolTip("New scene tab");newFolderButton->setAccessibleName("New scene tab");
   auto*overflowButton=new GlyphButton("down",tabStrip);overflowButton->setToolTip("All scene tabs");overflowButton->setAccessibleName("All scene tabs");
@@ -1537,7 +1623,7 @@ public:
   tabLayout->addWidget(sceneTabs,1);tabLayout->addWidget(newFolderButton);tabLayout->addWidget(overflowButton);l->addWidget(tabStrip);
   toolbar={refreshButton,collapse,expand,newFolderButton,overflowButton,settingsButton};for(auto*b:toolbar)b->setMotionDuration(motionDuration);
   connect(settingsButton,&QToolButton::clicked,this,[this,settingsButton]{densityMenu(settingsButton);});
-  search=new QLineEdit(bar);search->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);search->setPlaceholderText("Find in tab…");search->setClearButtonEnabled(true);search->setAccessibleName("Find scenes or sources in tab");search->setMinimumWidth(50);
+  search=new QLineEdit(bar);search->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);search->setPlaceholderText(allTabsSearch?"Find across tabs…":"Find in tab…");search->setClearButtonEnabled(true);search->setAccessibleName("Find scenes or sources in tab");search->setMinimumWidth(50);
   bar->addWidget(search);bar->addWidget(refreshButton);bar->addWidget(collapse);bar->addWidget(expand);bar->addWidget(settingsButton);l->addWidget(bar);
   connect(search,&QLineEdit::textChanged,this,[this](const QString&t){query=t;animateStructure=true;collapse->setEnabled(!searching());expand->setEnabled(!searching());dirty=true;request();});
   scroll=new QScrollArea(this);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);body=new QWidget;rows=new ReorderLayout(body);rows->setContentsMargins(0,0,0,0);rows->setSpacing(1);scroll->setWidget(body);
@@ -1571,7 +1657,7 @@ public:
  void refresh(){
   if(stopping||editingAppearance||!isVisible())return;
   char *raw=obs_frontend_get_current_scene_collection();QString now=QString::fromUtf8(raw?raw:"");bfree(raw);
-  if(collection!=now){closeInspector();resetRows=true;collection=now;folderHistory.clear();folders=folderStore.load(now);activeTab=folderStore.tab(now);tabsDirty=true;copied.reset();thumbnails.clear();attempted.clear();opened.clear();selected.clear();initialized=false;dirty=true;}
+  if(collection!=now){closeInspector();resetRows=true;collection=now;folderHistory.clear();favorites=navigation.favorites(now);folders=folderStore.load(now);activeTab=folderStore.tab(now);tabsDirty=true;copied.reset();thumbnails.clear();attempted.clear();opened.clear();selected.clear();initialized=false;dirty=true;}
   Source live(obs_frontend_get_current_scene(),obs_source_release);
   Source preview(obs_frontend_preview_program_mode_active()?obs_frontend_get_current_preview_scene():nullptr,obs_source_release);
   if(!initialized&&!now.isEmpty()){auto saved=navigation.opened(now);if(saved)opened=*saved;else if(live)opened.insert(uuid(live.get()));initialized=true;}
@@ -1580,6 +1666,9 @@ public:
   auto nextProgram=live?folders.rootForScene(uuid(live.get())):QStringLiteral("no-program");
   auto nextPreview=preview?folders.rootForScene(uuid(preview.get())):QStringLiteral("no-preview");
   if(programTab!=nextProgram||previewTab!=nextPreview){programTab=nextProgram;previewTab=nextPreview;tabsDirty=true;}
+  QHash<QString,int> counts;QHash<QString,obs_source_t*> byId;QHash<QString,QStringList> byParent;
+  for(size_t i=0;i<list.sources.num;i++){auto*s=list.sources.array[i];auto id=uuid(s);byId.insert(id,s);byParent[folders.parentOfScene(id)].append(id);counts[folders.rootForScene(id)]++;}
+  if(counts!=tabCounts){tabCounts=counts;tabsDirty=true;}
   if(tabsDirty)refreshTabs();
   for(const auto&f:folders.folders())if(f.id!=activeTab&&folders.rootForFolder(f.id)==activeTab)sceneKeys.insert(f.id);
   for(size_t i=0;i<list.sources.num;i++){auto id=uuid(list.sources.array[i]);if(folders.rootForScene(id)==activeTab)sceneKeys.insert(id);}
@@ -1589,14 +1678,18 @@ public:
     Node n;n.folder=true;n.key=n.uid=f.id;n.title=f.name;n.depth=depth;nodes.append(n);
     if(searching()||opened.contains(n.key))append(n.key,depth+1);
    }
-   for(size_t i=0;i<list.sources.num;i++){
-    auto*s=list.sources.array[i];auto n=makeNode(s);
-    if(folders.parentOfScene(n.uid)!=parent)continue;
+   for(const auto&id:favoriteFirst(folders.orderedScenes(parent,byParent.value(parent)),favorites)){
+    auto*s=byId.value(id);if(!s)continue;auto n=makeNode(s);
     n.scene=true;n.key=n.uid;n.depth=depth;n.program=s==live.get();n.preview=s==preview.get();nodes.append(n);
     if(searching()||opened.contains(n.key))collect(obs_scene_from_source(s),n.key,depth+1,nodes);
    }
   };
-  append(activeTab,0);
+  if(searching()&&allTabsSearch){
+   append({},0);
+   for(const auto&f:folders.folders())if(f.parent.isEmpty()){
+    Node n;n.folder=true;n.key=n.uid=f.id;n.title=f.name;nodes.append(n);append(f.id,1);
+   }
+  }else append(activeTab,0);
   obs_frontend_source_list_free(&list);
   if(searching())nodes=filterHierarchy(nodes,query);
   if(dirty||nodes!=previous){previous=nodes;dirty=false;render(nodes);}

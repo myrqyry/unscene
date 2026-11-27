@@ -18,6 +18,9 @@ switching scenes. No Aftermarket dependency.
 
 - **Scenes and sources in one dock:** reorderable organization-only scene tabs with nested folders, drag-to-move, and separate organization undo/redo; expand independently of activation; search
   collapsed scenes and groups; persistent expansion and thumbnail density.
+- **Scene organization:** presentation-only tabs/folders, drag ordering, pinned scenes,
+  all-tab search, scene counts and native scene creation/duplication.
+- **Quick editing:** second-row in/out transition, transform and blending controls.
 - **Dynamic appearance:** Material-inspired tonal scene containers, custom colors,
   artwork and icons, dimmed hidden sources, and theme-aware live/hover controls.
 - **Source management:** add existing or new inputs, copy references or duplicates
@@ -78,9 +81,10 @@ architecture; successful compilation does not establish native runtime support.
   show/hide transitions are not supported.
 - Optional idle snapshot capture uses synchronous graphics readback; disabled
   by default and gated while outputs are active. No streaming benchmark yet.
-- Scene/folder drag ordering, folder undo, cross-parent source drag, full scene/group management and indirect nested scene
-  usage traversal are not implemented. This is not yet a complete native-dock
-  replacement.
+- Cross-parent source drag, full scene/group management and indirect nested scene
+  usage traversal are not implemented. Scene removal remains native-only. Scene-out
+  overrides apply only to Unscene activation in normal mode when the destination has
+  no incoming override. This is not yet a complete native-dock replacement.
 
 ## License
 
