@@ -17,6 +17,7 @@
 
 inline QPixmap glyphPixmap(const QString &id,const QColor&color,int size,qreal dpr=1){
  static const QHash<QString,QString> paths={
+ {"note","<circle cx='12' cy='12' r='9'/><path d='M12 11v5m0-8v.1'/>"},
  {"close","<path d='m6 6 12 12M18 6 6 18'/>"},
  {"pin","<path d='m15 3 6 6-4 1-3 5v4l-4-4-6 6m6-6-5-5h4l5-3Z'/>"},
  {"pin-filled","<path d='m15 3 6 6-4 1-3 5v4l-4-4-5-5h4l5-3Z' fill='currentColor'/><path d='m10 15-6 6'/>"},

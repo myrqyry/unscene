@@ -17,7 +17,7 @@ driver at 875f6b1 (same project owner), without its websocket/runtime
 dependencies. Pinned source bytes and upstream dependency manifests are
 verified; exact source patches fail if the expected source differs. The
 Windows Qt SDK provides minimal rather than offscreen. Tests use isolated
-Xvfb for Linux libobs startup. All 19 current tests are required; JUnit rejects
+Xvfb for Linux libobs startup. All 20 current tests are required; JUnit rejects
 missing, failed, disabled or skipped cases. Source package and its binary
 payload manifest are produced only by the Linux OBS32 job.
 

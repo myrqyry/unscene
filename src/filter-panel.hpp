@@ -10,10 +10,11 @@
 #include <QStyle>
 #include <QMenu>
 #include "theme.hpp"
+#include "context-appearance.hpp"
 #include <functional>
 struct FilterEntry{
- QString id,name,type;bool enabled=false,async=false;
- bool operator==(const FilterEntry&b)const{return id==b.id&&name==b.name&&type==b.type&&enabled==b.enabled&&async==b.async;}
+ QString id,name,type;bool enabled=false,async=false;QString note;
+ bool operator==(const FilterEntry&b)const{return id==b.id&&name==b.name&&type==b.type&&enabled==b.enabled&&async==b.async&&note==b.note;}
 };
 inline bool filterCompatible(uint32_t source,uint32_t filter){
  if(filter&(OBS_SOURCE_DEPRECATED|OBS_SOURCE_CAP_DISABLED))return false;
@@ -62,7 +63,7 @@ public:
    connect(menu,&QMenu::aboutToShow,this,[this,a,selected,any]{a->setEnabled((!selected||!selectedId().isEmpty())&&(!any||!entries.isEmpty()));});
    connect(a,&QAction::triggered,this,[this,op]{if(onAction)onAction(op,selectedId());});
   };
-  action("Rename filter…","rename",true,false);menu->addSeparator();
+  action("Rename filter…","rename",true,false);action("Add / edit note…","note",true,false);menu->addSeparator();
   action("Copy filter","copy",true,true);action("Copy filter stack","copy-stack",false,true);
   action("Paste filters…","paste",false,false);menu->addSeparator();
   action("Export filter…","export",true,true);action("Export filter stack…","export-stack",false,true);
@@ -84,7 +85,7 @@ public:
  void setEntries(QVector<FilterEntry> next){
   if(entries==next)return;
   const auto selected=selectedId();QSignalBlocker guard(list);entries=std::move(next);list->clear();
-  for(auto&e:entries){auto*i=new QListWidgetItem(e.name+(e.enabled?"":" (disabled)"),list);i->setData(Qt::UserRole,e.id);i->setToolTip(e.type+(e.async?" — Audio/video":" — Effect"));i->setFlags(i->flags()|Qt::ItemIsUserCheckable);i->setCheckState(e.enabled?Qt::Checked:Qt::Unchecked);if(e.id==selected)list->setCurrentItem(i);}
+  for(auto&e:entries){auto*i=new QListWidgetItem(e.name+(e.enabled?"":" (disabled)"),list);i->setData(Qt::UserRole,e.id);i->setToolTip(e.note.isEmpty()?e.type+(e.async?" — Audio/video":" — Effect"):unscene::noteTooltip(e.note));if(!e.note.isEmpty())i->setIcon(QIcon(glyphPixmap("note",palette().color(QPalette::Text),16,devicePixelRatioF())));i->setFlags(i->flags()|Qt::ItemIsUserCheckable);i->setCheckState(e.enabled?Qt::Checked:Qt::Unchecked);if(e.id==selected)list->setCurrentItem(i);}
   if(!list->currentItem()&&list->count())list->setCurrentRow(0);updateButtons();
  }
 };

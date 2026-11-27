@@ -69,10 +69,10 @@ Source source(const QString &uuid){return Source(obs_get_source_by_uuid(uuid.toU
 QString uuid(obs_source_t*s){return s?QString::fromUtf8(obs_source_get_uuid(s)):QString();}
 struct Node {
  QString key,uid,parent,title; int iconType=0; bool muted=false; int64_t id=0; int depth=0;
- bool scene=false,group=false,folder=false,visible=true,locked=false,program=false,preview=false,video=false,audio=false;
+ bool noteScene=false,scene=false,group=false,folder=false,visible=true,locked=false,program=false,preview=false,video=false,audio=false;
  bool operator==(const Node &b)const {return key==b.key&&uid==b.uid&&parent==b.parent&&title==b.title&&iconType==b.iconType&&muted==b.muted&&id==b.id&&depth==b.depth&&scene==b.scene&&group==b.group&&folder==b.folder&&visible==b.visible&&locked==b.locked&&program==b.program&&preview==b.preview&&video==b.video&&audio==b.audio;}
 };
-Node makeNode(obs_source_t *s){Node n; n.uid=uuid(s); n.title=QString::fromUtf8(obs_source_get_name(s)); auto flags=obs_source_get_output_flags(s); n.iconType=obs_source_get_icon_type(obs_source_get_id(s));n.muted=obs_source_muted(s);n.video=flags&OBS_SOURCE_VIDEO; n.audio=flags&OBS_SOURCE_AUDIO; return n;}
+Node makeNode(obs_source_t *s){Node n; n.uid=uuid(s); n.noteScene=obs_source_get_type(s)==OBS_SOURCE_TYPE_SCENE;n.title=QString::fromUtf8(obs_source_get_name(s)); auto flags=obs_source_get_output_flags(s); n.iconType=obs_source_get_icon_type(obs_source_get_id(s));n.muted=obs_source_muted(s);n.video=flags&OBS_SOURCE_VIDEO; n.audio=flags&OBS_SOURCE_AUDIO; return n;}
 QString sourceGlyph(const Node&n){
  if(n.scene)return "layers";
  if(n.group||n.folder)return "folder";
@@ -134,6 +134,11 @@ QString configPath(const char* file){
  char* raw=obs_module_config_path(file);
  const auto path=QString::fromUtf8(raw?raw:"");bfree(raw);
  return path;
+}
+QString sharedConfigPath(const char*file){
+ const auto own=configPath("navigation.ini");
+ if(own.isEmpty())return {};
+ return QDir(QFileInfo(own).absoluteDir().absoluteFilePath("../aftermarket")).filePath(file);
 }
 QString currentCollection(){
  char*raw=obs_frontend_get_current_scene_collection();auto result=QString::fromUtf8(raw?raw:"");bfree(raw);return result;
@@ -326,7 +331,9 @@ class Dock : public QWidget {
    auto&v=*static_cast<QVector<FilterEntry>*>(opaque);
    auto flags=obs_source_get_output_flags(f);
    v.append({uuid(f),QString::fromUtf8(obs_source_get_name(f)),QString::fromUtf8(obs_source_get_display_name(obs_source_get_id(f))),obs_source_enabled(f),bool(flags&OBS_SOURCE_ASYNC)});
-  },&out);return out;
+  },&out);
+  for(auto &entry:out)entry.note=notes->get(unscene::noteKey("filter",entry.id,uuid(parent)));
+  return out;
  }
  void refreshInspectorExtras(bool usage=false){
   if(!inspected)return;
@@ -430,6 +437,17 @@ class Dock : public QWidget {
   if(!inspected||inspected->key!=n.key||!sameCollection(expected))return;
   auto parent=inspectorSource(n,expected);if(!parent)return;
   QScopedValueRollback<bool> guard(editingAppearance,true);
+  if(action=="note"){
+   auto find=[n,id,expected](Dock* dock)->QString{
+    if(!dock||!dock->noteTargetValid(n,expected))return {};
+    auto s=source(n.uid);if(!s)return {};
+    struct Search{QString id,name;};Search result{id,{}};
+    obs_source_enum_filters(s.get(),[](obs_source_t*,obs_source_t*f,void*p){auto&r=*static_cast<Search*>(p);if(!obs_source_removed(f)&&uuid(f)==r.id)r.name=QString::fromUtf8(obs_source_get_name(f));},&result);
+    return result.name;
+   };
+   QPointer<Dock> safe(this);auto name=find(this);if(name.isEmpty())return;
+   unscene::editContextNote(this,notes,unscene::noteKey("filter",id,n.uid),name,[safe,find]{return safe&&!find(safe).isEmpty();},[safe]{if(safe)safe->refreshInspectorExtras();});return;
+  }
   if(action=="settings"){obs_frontend_open_source_filters(parent.get());return;}
   if(action=="copy"||action=="copy-stack"||action=="export"||action=="export-stack"||action=="paste"||action=="import"){
    transferFilters(n,expected,parent.get(),action,id);return;
@@ -549,6 +567,43 @@ class Dock : public QWidget {
  QElapsedTimer clock;
  AppearanceStore appearances{configPath("appearance.ini")};
  NavigationStore navigation{configPath("navigation.ini")};
+ std::shared_ptr<unscene::ContextNotes> notes=std::make_shared<unscene::ContextNotes>(sharedConfigPath("context-notes.json"));
+ std::unique_ptr<unscene::SharedFileWatch> sharedWatch;
+ unscene::RowStripes stripes;
+ QString noteKeyFor(const Node&n,bool placement=false)const{
+  if(n.folder)return {};
+  return placement?(n.scene?QString{}:unscene::noteKey("item",n.uid,n.parent,n.id)):unscene::noteKey(n.noteScene?"scene":"source",n.uid);
+ }
+ bool noteTargetValid(const Node&n,const QString&expected){
+  if(!sameCollection(expected)||n.folder)return false;
+  auto s=source(n.uid);if(!s||obs_source_removed(s.get()))return false;
+  return n.scene?obs_source_get_type(s.get())==OBS_SOURCE_TYPE_SCENE:withItem(n.parent,n.id,n.uid,[](auto*){});
+ }
+ void editNote(const Node&n,bool placement,const QString&expected){
+  QPointer<Dock> safe(this);
+  unscene::editContextNote(this,notes,noteKeyFor(n,placement),n.title+(placement?" — this placement":""),
+   [safe,n,expected]{return safe&&safe->noteTargetValid(n,expected);},
+   [safe]{if(safe){safe->dirty=true;safe->request();}});
+ }
+ void queueNote(const Node&n,bool placement,const QString&expected){
+  QTimer::singleShot(0,this,[this,n,placement,expected]{editNote(n,placement,expected);});
+ }
+ void noteBadgeClicked(const Node&n,const QString&expected){
+  if(!noteTargetValid(n,expected))return;
+  const auto shared=notes->get(noteKeyFor(n)),item=notes->get(noteKeyFor(n,true));
+  if(!shared.isEmpty()&&!item.isEmpty()){
+   QMenu menu(this);auto*a=menu.addAction("Edit shared note…"),*b=menu.addAction("Edit placement note…");
+   connect(a,&QAction::triggered,this,[this,n,expected]{queueNote(n,false,expected);});
+   connect(b,&QAction::triggered,this,[this,n,expected]{queueNote(n,true,expected);});menu.exec(QCursor::pos());
+  }else queueNote(n,shared.isEmpty()&&!item.isEmpty(),expected);
+ }
+ void reloadSharedAppearance(){
+  if(auto next=unscene::readStripes(sharedConfigPath("rules.json"));next&& !(*next==stripes)){stripes=*next;dirty=true;}
+  notes->reload();if(dirty)request();
+ }
+ bool stripeEnabled(bool scenes)const{
+  const int local=navigation.stripeMode(scenes);return local<0?(scenes?stripes.scenes:stripes.sources):local==1;
+ }
  SceneFolderStore folderStore{configPath("scene-folders.ini")};
  SceneFolders folders;
  SceneTabBar*sceneTabs=nullptr;
@@ -924,6 +979,14 @@ class Dock : public QWidget {
   auto*folder=menu.addAction("New scene tab…");auto expected=collection;connect(folder,&QAction::triggered,this,[this,expected]{QTimer::singleShot(0,this,[this,expected]{newFolder({},expected);});});
   addOrganizationHistory(menu);
   menu.addSeparator();
+  auto*backgrounds=menu.addMenu("Alternating backgrounds");
+  for(bool scenes:{true,false}){
+   auto*sub=backgrounds->addMenu(scenes?"Scenes":"Sources");auto*group=new QActionGroup(sub);group->setExclusive(true);
+   for(int mode:{-1,1,0}){
+    auto*a=sub->addAction(mode<0?"Follow Aftermarket":mode==1?"On":"Off");a->setCheckable(true);a->setChecked(navigation.stripeMode(scenes)==mode);group->addAction(a);
+    connect(a,&QAction::triggered,this,[this,scenes,mode]{navigation.saveStripeMode(scenes,mode);dirty=true;request();});
+   }
+  }
   for(bool scenes:{true,false}){
    auto*sub=menu.addMenu(scenes?"Scene thumbnails":"Source thumbnails");
    auto*group=new QActionGroup(sub);group->setExclusive(true);
@@ -1398,6 +1461,12 @@ class Dock : public QWidget {
   }
   addTargetActions(menu,n,expected);
   menu.addSeparator();
+  auto*note=menu.addAction(notes->get(noteKeyFor(n)).isEmpty()?"Add note…":"Edit note…");
+  connect(note,&QAction::triggered,this,[this,n,expected]{queueNote(n,false,expected);});
+  if(!n.scene){
+   auto*placement=menu.addAction(notes->get(noteKeyFor(n,true)).isEmpty()?"Add placement note…":"Edit placement note…");
+   connect(placement,&QAction::triggered,this,[this,n,expected]{queueNote(n,true,expected);});
+  }
   auto*rename=menu.addAction("Rename…");connect(rename,&QAction::triggered,this,[this,n]{QTimer::singleShot(0,this,[this,n]{renameSource(n);});});
   auto*appearance=menu.addAction("Appearance…");connect(appearance,&QAction::triggered,this,[this,n]{queueAppearance(n);});
   menu.exec(pos);
@@ -1497,7 +1566,7 @@ class Dock : public QWidget {
    while(index<rowOrder.size()&&rowOrder[index]!=key){auto*shell=exits.take(rowOrder[index++]);if(shell)rows->addWidget(shell);}
    if(index<rowOrder.size())++index;
   };
-  QColor sceneColor;
+  QColor sceneColor;int sceneParity=0,sourceParity=0;
   for(int nodeIndex=0;nodeIndex<nodes.size();++nodeIndex){
    const auto&n=nodes[nodeIndex];
    const bool isOpen=searching()||opened.contains(n.key), expanded=selected==n.key;
@@ -1528,6 +1597,16 @@ class Dock : public QWidget {
    r->setAccent(appearance.color);
    if(n.scene||n.folder)sceneColor=appearance.color;
    else r->setBranchColor(sceneColor,nodeIndex==0||nodes[nodeIndex-1].scene||nodes[nodeIndex-1].folder,nodeIndex+1==nodes.size()||nodes[nodeIndex+1].scene||nodes[nodeIndex+1].folder);
+   if(n.scene||n.folder)sourceParity=0;
+   const bool stripe=n.scene?stripeEnabled(true):!n.folder&&stripeEnabled(false);
+   const bool odd=n.scene?(sceneParity++%2)!=0:!n.folder&&(sourceParity++%2)!=0;
+   r->setStripe(stripes,stripe,odd);
+   if(!n.folder){
+    auto shared=notes->get(noteKeyFor(n)),item=notes->get(noteKeyFor(n,true));
+    const auto note=shared.isEmpty()?item:item.isEmpty()?shared:"Shared note: "+shared+ "\n\nPlacement note: "+item;
+    auto expected=collection;r->setNote(note,[this,n,expected]{noteBadgeClicked(n,expected);});
+   }
+   if(art.isNull()&&(!snapshotKeys.contains(n.key)||!thumbnails.contains(n.uid)))r->thumb->setPixmap(sourceArtwork(n,r));
    if(fresh){
    r->onAppearance=[this,n]{if(n.folder){auto pos=QCursor::pos();QTimer::singleShot(0,this,[this,n,pos]{folderMenu(n,pos);});}else queueNativeContext(n);};
    r->onBody=[this,n]{toggle(n);};
@@ -1642,6 +1721,9 @@ public:
    selected.clear();saveOpened();dirty=true;request();});
   connect(expand,&QToolButton::clicked,this,[this]{animateStructure=true;opened.unite(sceneKeys);saveOpened();dirty=true;request();});
   dragScrollTimer.setInterval(25);connect(&dragScrollTimer,&QTimer::timeout,this,[this]{scrollDraggedRow();});
+  notes->onChanged([this]{dirty=true;request();refreshInspectorExtras();});
+  sharedWatch=std::make_unique<unscene::SharedFileWatch>(QStringList{sharedConfigPath("context-notes.json"),sharedConfigPath("rules.json")},[this]{if(!stopping)reloadSharedAppearance();});
+  reloadSharedAppearance();
   connect(&timer,&QTimer::timeout,this,[this]{refresh();});clock.start();timer.start(400); // Bounded polling and at most one idle capture per tick.
  }
  void themeGeometry(){
@@ -1653,7 +1735,7 @@ public:
  }
  void themeChanged(){tabsDirty=true;if(drawer->moving())drawer->finish();inspector->finishMotion();themeGeometry();resetRows=true;dirty=true;request();}
  void hideEvent(QHideEvent*e)override{clearDrag();rows->finish();if(drawer->moving())drawer->finish();inspector->finishMotion();QWidget::hideEvent(e);}
- void stop(){stopping=true;clearDrag();rows->finish();if(drawer->moving())drawer->finish();inspector->finishMotion();timer.stop();}
+ void stop(){stopping=true;notes->onChanged({});sharedWatch.reset();clearDrag();rows->finish();if(drawer->moving())drawer->finish();inspector->finishMotion();timer.stop();}
  void refresh(){
   if(stopping||editingAppearance||!isVisible())return;
   char *raw=obs_frontend_get_current_scene_collection();QString now=QString::fromUtf8(raw?raw:"");bfree(raw);

@@ -64,7 +64,7 @@ Unscene plugin directory; appearance/navigation settings are separate.
 
 The [CI workflow](.github/workflows/ci.yml) targets Linux x86-64,
 Windows x64, and macOS Intel/Apple Silicon against pinned OBS 32.2.0 and
-33.0.3 SDKs. Each job requires at least 19 native tests before packaging.
+33.0.3 SDKs. Each job requires at least 20 native tests before packaging.
 The earlier eight-leg matrix passed; the latest feature revision needs hosted requalification. See [CI details](docs/ci.md).
 
 CI artifacts are preview/test packages, not automatically published releases.
@@ -93,3 +93,6 @@ architecture; successful compilation does not establish native runtime support.
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE) and [attribution](NOTICE.md).
+
+### Aftermarket interoperability
+Private scene, source, placement and filter notes share Aftermarket’s UUID-keyed local note store. Unscene follows Aftermarket alternating-row colors by default, with independent scene/source overrides in Dock settings. Neither plugin is required to run the other.

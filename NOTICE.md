@@ -27,3 +27,5 @@ repository; the CI workflow calls the shared obs-plugin-ci repository.
 
 Developed in collaboration with a trusted AI colleague. This voluntary
 acknowledgment describes the development process, not a warranty of code quality.
+
+The shared private note format and atomic storage implementation are adapted from [Aftermarket](https://github.com/myrqyry/aftermarket) (GPL-3.0-or-later), src/context-notes.cpp.

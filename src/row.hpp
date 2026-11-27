@@ -1,3 +1,4 @@
+#include "context-appearance.hpp"
 #pragma once
 #include <QWidget>
 #include <QLabel>
@@ -71,6 +72,28 @@ public:
  std::function<void()> onDragCancel;
  void cancelGesture(){pressed=dragging=false;}
  void setDropIndicator(int edge){if(dropEdge!=edge){dropEdge=edge;update();}}
+ void setStripe(const unscene::RowStripes &value,bool enabled,bool odd){
+  if(stripes==value&&striped==enabled&&alternateRow==odd)return;
+  stripes=value;striped=enabled;alternateRow=odd;applyInk();update();
+ }
+ QColor idleSurface()const{
+  const auto pal=nativeList?nativeList->palette():palette();
+  const auto original=isScene?roles.header:branchEnabled?roles.container:pal.color(QPalette::Base);
+  return striped?stripes.color(pal,original,alternateRow,accentColor.isValid()||branchColor.isValid()):original;
+ }
+ void setNote(const QString&text,std::function<void()> edit){
+  noteAction=std::move(edit);
+  if(!noteBadge&&!text.isEmpty()){
+   noteBadge=new GlyphButton("note",top);noteBadge->setObjectName("unscene-note");noteBadge->setAccessibleName("Edit private note");
+   first->insertWidget(first->indexOf(name)+1,noteBadge);
+   connect(noteBadge,&QToolButton::clicked,this,[this]{if(noteAction)noteAction();});
+   styleControl(noteBadge);
+  }
+  if(noteBadge){
+   const auto tip=unscene::noteTooltip(text);if(noteBadge->toolTip()!=tip)noteBadge->setToolTip(tip);
+   noteBadge->setVisible(!text.isEmpty());
+  }
+ }
  void setAccent(const QColor &color){if(accentColor!=color){accentColor=color;refreshRoles();applyInk();update();}}
  QColor accent()const{return accentColor;}
  void setBranchColor(const QColor&color,bool first,bool last){
@@ -102,9 +125,9 @@ public:
  void setNativeList(QListView *v){if(nativeList!=v){nativeList=v;applyGeometry();refreshRoles();applyInk();update();}}
  void setStatus(const QString&s){status->setFullText(s);status->setFont(rowTypography(font(),TypographyRole::Status));status->setFixedWidth(status->fontMetrics().horizontalAdvance(s)+qBound(2,themeSpacing(this,Qt::Horizontal),6));status->setVisible(!s.isEmpty());status->setToolTip(s);}
  QColor inkColor()const{
-  const auto fg=selected?palette().color(QPalette::HighlightedText):isScene?roles.onHeader:branchEnabled?roles.onContainer:palette().color(QPalette::WindowText);
+  const auto fg=selected?contrastInk(palette().color(QPalette::Highlight),palette().color(QPalette::HighlightedText)):striped?contrastInk(idleSurface(),palette().color(QPalette::WindowText)):isScene?roles.onHeader:branchEnabled?roles.onContainer:palette().color(QPalette::WindowText);
   if(!sourceDimmed)return fg;
-  const auto bg=selected?palette().color(QPalette::Highlight):branchEnabled?roles.container:palette().color(QPalette::Base);
+  const auto bg=selected?palette().color(QPalette::Highlight):idleSurface();
   // Keep hidden text readable; reduce the dimming if the palette is already
   // near the normal-text contrast threshold.
   for(double amount:{.20,.15,.10,.05}){
@@ -157,8 +180,8 @@ protected:
   }
   const QRectF rowSurface=surface.adjusted(1,isScene?0:1,-1,isScene?0:-1);
   QPainterPath rounded;rounded.addRoundedRect(rowSurface,radius,radius);
-  if(isScene&&!selected)
-   p.fillPath(rounded,roles.header);
+  if(!selected&&(isScene||striped))
+   p.fillPath(rounded,idleSurface());
   // Draw the theme selection as an antialiased path, rather than clipping a
   // square native item painter (raster clip edges can look visibly jagged).
   if(selected)p.fillPath(rounded,palette().color(QPalette::Highlight));
@@ -172,7 +195,7 @@ protected:
    // Source accents remain distinct without recoloring the whole scene surface.
    auto indicatorColor=accentRoles.accent;
    if(selected)indicatorColor=contrastInk(palette().color(QPalette::Highlight),indicatorColor,3);
-   else if(isScene||branchEnabled)indicatorColor=contrastInk(isScene?roles.header:roles.container,indicatorColor,3);
+   else if(isScene||branchEnabled||striped)indicatorColor=contrastInk(idleSurface(),indicatorColor,3);
    p.setPen(Qt::NoPen);p.setBrush(indicatorColor);
    const qreal barWidth=qMax(2,h/2);
    const QRectF indicator(rowSurface.left()+2,rowSurface.top()+4,barWidth,qMax(0.0,rowSurface.height()-8));
@@ -210,6 +233,7 @@ private:
  int dropEdge=0;bool pressed=false,dragging=false;QPoint pressPoint;
  bool isScene,opened=false,selected=false,sourceDimmed=false;int nestDepth=0;bool ready=false;QWidget*top=nullptr;QColor accentColor,branchColor;bool branchEnabled=false,branchFirst=true,branchLast=true; int duration=0;Reveal*secondaryReveal;
  SceneSurfaceRoles roles,accentRoles;
+ unscene::RowStripes stripes;bool striped=false,alternateRow=false;GlyphButton*noteBadge=nullptr;std::function<void()> noteAction;
  void refreshRoles(){const auto pal=nativeList?nativeList->palette():palette();roles=sceneSurfaceRoles(pal,isScene?accentColor:branchColor);accentRoles=sceneSurfaceRoles(pal,accentColor);}
  QVariantAnimation rowHover;qreal hoverAmount=0;
  void animateHover(qreal target){rowHover.stop();if(!duration){hoverAmount=target;update();return;}rowHover.setDuration(duration);rowHover.setStartValue(hoverAmount);rowHover.setEndValue(target);rowHover.start();}
@@ -233,14 +257,14 @@ private:
   ready=true;updateGeometry();
  }
  void styleControl(GlyphButton*b){
-  const auto bg=selected?palette().color(QPalette::Highlight):isScene?roles.header:branchEnabled?roles.container:palette().color(QPalette::Base);
-  const auto fg=selected?palette().color(QPalette::HighlightedText):isScene?roles.onHeader:branchEnabled?roles.onContainer:palette().color(QPalette::WindowText);
+  const auto bg=selected?palette().color(QPalette::Highlight):idleSurface();
+  const auto fg=selected?contrastInk(palette().color(QPalette::Highlight),palette().color(QPalette::HighlightedText)):striped?contrastInk(idleSurface(),palette().color(QPalette::WindowText)):isScene?roles.onHeader:branchEnabled?roles.onContainer:palette().color(QPalette::WindowText);
   b->setTonalColors(bg,fg);
  }
  void applyInk(){
   const auto fg=inkColor();
   for(auto*l:{name,status}){auto p=l->palette();p.setColor(QPalette::WindowText,fg);p.setColor(QPalette::Text,fg);l->setPalette(p);l->setInk(fg);}
-  styleControl(disclosure);for(auto*b:hoverButtons)styleControl(static_cast<GlyphButton*>(b));for(auto*b:secondaryButtons)styleControl(static_cast<GlyphButton*>(b));
+  styleControl(disclosure);if(noteBadge)styleControl(noteBadge);for(auto*b:hoverButtons)styleControl(static_cast<GlyphButton*>(b));for(auto*b:secondaryButtons)styleControl(static_cast<GlyphButton*>(b));
  }
  QToolButton*makeButton(const QString&tip,const QString&icon,std::function<void()>action){
   auto*b=new GlyphButton(icon,this);styleControl(b);b->setMotionDuration(duration);b->setToolTip(tip);b->setAccessibleName(tip);connect(b,&QToolButton::clicked,this,[a=std::move(action)]{a();});return b;

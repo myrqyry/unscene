@@ -63,6 +63,8 @@ public:
   if(collection.isEmpty())return false;auto ids=favorites.values();std::sort(ids.begin(),ids.end());
   settings.setValue(key(collection)+"-favorites",ids);settings.sync();return settings.status()==QSettings::NoError;
  }
+ int stripeMode(bool scenes)const{return qBound(-1,settings.value(scenes?"stripes/scenes":"stripes/sources",-1).toInt(),1);}
+ bool saveStripeMode(bool scenes,int mode){settings.setValue(scenes?"stripes/scenes":"stripes/sources",qBound(-1,mode,1));settings.sync();return settings.status()==QSettings::NoError;}
  bool searchAllTabs()const{return settings.value("search/allTabs",false).toBool();}
  bool saveSearchAllTabs(bool value){settings.setValue("search/allTabs",value);settings.sync();return settings.status()==QSettings::NoError;}
  SnapshotMode snapshotMode()const{return settings.value("snapshots/idleCapture",false).toBool()?SnapshotMode::IdleOnly:SnapshotMode::CachedOnly;}
