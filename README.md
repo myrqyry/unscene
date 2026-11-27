@@ -37,7 +37,7 @@ switching scenes. No Aftermarket dependency.
 | :---: | :---: |
 | ![Transform, transitions and blending shortcuts](docs/screenshots/source-shortcuts.png) | ![Search results across scene tabs](docs/screenshots/all-tabs-search.png) |
 
-[Transform inspector preview](docs/screenshots/preview-inspector.png)
+[Transform inspector preview](docs/screenshots/preview-inspector.png) · [Compact light-theme inspector](docs/screenshots/inspector-light-compact.png) · [Filter toolbar](docs/screenshots/inspector-light-filters.png)
 
 [Detailed usage and limitations](docs/usage.md) · [Build checks](https://github.com/myrqyry/unscene/actions)
 
