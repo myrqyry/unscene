@@ -1,7 +1,13 @@
 # Licensing and attribution
 
-Unscene is distributed under the GNU General Public License, version 2 or
-(at your option) any later version (GPL-2.0-or-later). See [LICENSE](LICENSE).
+Copyright © 2026 myrqyry.
+
+Unscene’s original software in this revision is distributed under the GNU
+General Public License, version 3 or (at your option) any later version
+(GPL-3.0-or-later). See [LICENSE](LICENSE). Previously granted licenses
+for earlier revisions are unaffected. Third-party materials retain their
+original terms. The corresponding source is available at
+https://github.com/myrqyry/unscene.
 
 Unscene is an independent native plugin for [OBS Studio](https://obsproject.com/),
 using libobs, the OBS frontend API and Qt 6. It is not an official OBS Project
