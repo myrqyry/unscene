@@ -98,3 +98,5 @@ GPL-3.0-or-later. See [LICENSE](LICENSE) and [attribution](NOTICE.md).
 Private scene, source, placement and filter notes share Aftermarket’s UUID-keyed local note store. Unscene follows Aftermarket alternating-row colors by default, with independent scene/source overrides in Dock settings. Neither plugin is required to run the other.
 
 Scene headers expand/collapse their source cards from any non-button area. Contiguous source bands retain the scene’s tonal color, notes and alternating-row preferences.
+
+Expanded scene headers provide native Filters and Projector shortcuts. Visual source projectors offer aspect-aware compact monitoring and large review windows, along with native windowed/fullscreen options.

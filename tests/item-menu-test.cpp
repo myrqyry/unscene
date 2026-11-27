@@ -1,6 +1,8 @@
 #include "../src/item-menu.hpp"
 #include "../src/transition-policy.hpp"
+#include "../src/projector-policy.hpp"
 #include <QApplication>
+#include <QScreen>
 #define CHECK(x) do{if(!(x)){qCritical("failed: %s",#x);return 1;}}while(false)
 int main(int argc,char**argv){
  QApplication app(argc,argv);
@@ -21,5 +23,21 @@ int main(int argc,char**argv){
  CHECK(chooseSceneOverride({"Fade",300},{"Cut",100}).name=="Fade");
  CHECK(chooseSceneOverride({},{"Cut",100}).name=="Cut");
  CHECK(chooseSceneOverride({},{}).name.isEmpty());
+ const QRect desktop(1920,20,1920,1040);
+ auto small=projectorWindowRect({1920,1080},desktop,ProjectorSize::Monitor);
+ CHECK(small.size()==QSize(320,180)&&desktop.contains(small));
+ auto portrait=projectorWindowRect({1080,1920},desktop,ProjectorSize::Monitor);
+ CHECK(portrait.height()==240&&portrait.width()==135&&desktop.contains(portrait));
+ auto large=projectorWindowRect({1920,1080},desktop,ProjectorSize::Review);
+ CHECK(large.size()==QSize(960,540)&&desktop.contains(large));
+ auto tiny=projectorWindowRect({1920,1080},QRect(-400,0,250,160),ProjectorSize::Review);
+ CHECK(QRect(-400,0,250,160).contains(tiny)&&tiny.width()<=250&&tiny.height()<=160);
+ CHECK(projectorWindowRect({},desktop,ProjectorSize::Monitor).size()==QSize(320,180));
+ CHECK(projectorWindowRect({1,100000},desktop,ProjectorSize::Monitor).width()>0);
+ CHECK(projectorWindowRect({1920,1080},{},ProjectorSize::Review).isEmpty());
+ const auto local=projectorWindowRect({1920,1080},QGuiApplication::primaryScreen()->availableGeometry(),ProjectorSize::Monitor);
+ QWidget restored(nullptr,Qt::Window);
+ CHECK(restored.restoreGeometry(QByteArray::fromBase64(projectorGeometry(local))));
+ CHECK(restored.size()==local.size());
  return 0;
 }

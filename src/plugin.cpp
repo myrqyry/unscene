@@ -24,6 +24,7 @@
 #include "native-menu.hpp"
 #include "item-menu.hpp"
 #include "transition-policy.hpp"
+#include "projector-policy.hpp"
 #include <QDialogButtonBox>
 #include <QComboBox>
 #include <QSpinBox>
@@ -53,6 +54,7 @@
 #include <QInputDialog>
 #include <QScopedValueRollback>
 #include <cstring>
+#include <climits>
 #include <QActionGroup>
 #include <QCache>
 #include <QDir>
@@ -1346,6 +1348,50 @@ class Dock : public QWidget {
    root.exec(pos);
   });
  }
+ void openTargetFilters(const Node&n,const QString&expected){
+  if(!sameCollection(expected))return;
+  auto s=source(n.uid);if(s&&!obs_source_removed(s.get()))obs_frontend_open_source_filters(s.get());
+ }
+ void projectorMenu(QMenu *menu,const Node&n,const QString&expected){
+  auto src=source(n.uid);if(!src||obs_source_removed(src.get())||!(obs_source_get_output_flags(src.get())&OBS_SOURCE_VIDEO))return;
+  // Resolve UUID and collection on invocation, not when the menu is built.
+  auto open=[this,n,expected](int monitor,std::optional<ProjectorSize> preset){
+   if(!sameCollection(expected))return;
+   auto s=source(n.uid);if(!s||obs_source_removed(s.get())||!(obs_source_get_output_flags(s.get())&OBS_SOURCE_VIDEO))return;
+   QByteArray geometry;
+   if(preset){
+    auto*display=screen();if(!display)display=QGuiApplication::primaryScreen();if(!display)return;
+    const auto w=obs_source_get_width(s.get()),h=obs_source_get_height(s.get());
+    const QSize dimensions(w>0&&w<=INT_MAX?int(w):0,h>0&&h<=INT_MAX?int(h):0);
+    geometry=projectorGeometry(projectorWindowRect(dimensions,display->availableGeometry(),*preset));
+   }
+   obs_frontend_open_projector(n.scene?"Scene":"Source",monitor,geometry.isEmpty()?nullptr:geometry.constData(),obs_source_get_name(s.get()));
+  };
+  for(auto preset:{ProjectorSize::Monitor,ProjectorSize::Review}){
+   auto*a=menu->addAction(preset==ProjectorSize::Monitor?"Compact monitor window":"Large review window");
+   a->setToolTip(preset==ProjectorSize::Monitor?"Small aspect-matched preview; use the native projector menu for Always on Top.":"Larger aspect-matched preview for inspecting details.");
+   connect(a,&QAction::triggered,this,[open,preset]{open(-1,preset);});
+  }
+  auto*window=menu->addAction("Windowed projector");connect(window,&QAction::triggered,this,[open]{open(-1,{});});
+  menu->addSeparator();
+  const auto screens=QGuiApplication::screens();
+  for(int i=0;i<qMin(10,int(screens.size()));++i){
+   QPointer<QScreen> display=screens[i];
+   auto*a=menu->addAction(QString("Fullscreen — display %1 (%2)").arg(i+1).arg(display->name()));
+   connect(a,&QAction::triggered,this,[open,display]{
+    if(!display)return;
+    const int current=QGuiApplication::screens().indexOf(display.data());
+    if(current>=0&&current<10)open(current,{});
+   });
+  }
+ }
+ void queueProjector(const Node&n){
+  const auto expected=collection;const auto pos=QCursor::pos();
+  QTimer::singleShot(0,this,[this,n,expected,pos]{
+   if(!sameCollection(expected))return;
+   QMenu menu(this);projectorMenu(&menu,n,expected);if(!menu.isEmpty())menu.exec(pos);
+  });
+ }
  void addTargetActions(QMenu&menu,const Node&n,const QString&expected){
   auto src=source(n.uid);if(!src||obs_source_removed(src.get()))return;
   auto addSourceAction=[&](QMenu*where,const QString&label,std::function<void(obs_source_t*)> fn){
@@ -1357,10 +1403,7 @@ class Dock : public QWidget {
   const auto flags=obs_source_get_output_flags(src.get());
   if(n.scene||(flags&OBS_SOURCE_VIDEO)){
    auto*project=menu.addMenu(n.scene?"Open scene projector":"Open source projector");
-   auto projector=[n](obs_source_t*s,int monitor){obs_frontend_open_projector(n.scene?"Scene":"Source",monitor,nullptr,obs_source_get_name(s));};
-   auto screens=QGuiApplication::screens();
-   for(int i=0;i<screens.size();++i)addSourceAction(project,QString("Display %1 — %2").arg(i+1).arg(screens[i]->name()),[projector,i](auto*s){projector(s,i);});
-   addSourceAction(project,"Windowed projector",[projector](auto*s){projector(s,-1);});
+   projectorMenu(project,n,expected);
    addSourceAction(&menu,n.scene?"Save scene screenshot":"Save source screenshot",[](auto*s){obs_frontend_take_source_screenshot(s);});
   }
   if(n.scene){
@@ -1636,9 +1679,12 @@ class Dock : public QWidget {
     r->addHover("More actions","more",[this,n]{queueContext(n);});
     r->addSecondary("Scene in transition","transition-in",[this,n]{queueTransition(n,true);});
     r->addSecondary("Scene out transition (Unscene activation)","transition-out",[this,n]{queueTransition(n,false);});
+    r->addSecondary("Scene filters","filters",[this,n,expected=collection]{openTargetFilters(n,expected);});
+    r->addSecondary("Scene projector","projector",[this,n]{queueProjector(n);});
    }else{
     r->addHover("Properties","properties",[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_properties(s.get());});
     r->addHover("Filters","filters",[n]{auto s=source(n.uid);if(s)obs_frontend_open_source_filters(s.get());});
+    if(n.video)r->addHover("Source projector","projector",[this,n]{queueProjector(n);});
     r->addHover(n.visible?"Hide source":"Show source",n.visible?"eye":"eye-off",[this,n]{changeItemState(n,collection,"visibility");},!n.visible);
     r->addSecondary(n.video?"Transform inspector":"Inspector",n.video?"transform":"inspector",[this,n]{inspect(n,true);if(inspected&&inspected->key==n.key&&n.video)inspector->showTransform();});
     if(n.video){
