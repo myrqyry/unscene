@@ -88,4 +88,4 @@ architecture; successful compilation does not establish native runtime support.
 
 ## License
 
-GPL-2.0-or-later. See [LICENSE](LICENSE) and [attribution](NOTICE.md).
+GPL-3.0-or-later. See [LICENSE](LICENSE) and [attribution](NOTICE.md).
