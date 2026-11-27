@@ -67,9 +67,9 @@ int main(int argc,char**argv) {
  auto sourceFont=rowTypography(base,TypographyRole::Source);
  auto metaFont=rowTypography(base,TypographyRole::Status);
  auto tabFont=rowTypography(base,TypographyRole::Tab);
- if(sceneFont.weight()<=sourceFont.weight()||sceneFont.pointSizeF()<sourceFont.pointSizeF()||metaFont.pointSizeF()<10||tabFont.weight()<=sourceFont.weight())return 18;
+ if(sceneFont.weight()<=sourceFont.weight()||sceneFont.pointSizeF()<sourceFont.pointSizeF()*1.14||metaFont.pointSizeF()<10||tabFont.weight()<=sourceFont.weight())return 18;
  base.setPixelSize(16);
- if(rowTypography(base,TypographyRole::Status).pixelSize()<13)return 19;
+ if(rowTypography(base,TypographyRole::Status).pixelSize()<13||rowTypography(base,TypographyRole::Scene).pixelSize()<18)return 19;
  Row sceneTools("Scene tools",true,false,0);
  int shortcut=0,disclosed=0;
  sceneTools.onDisclosure=[&]{++disclosed;};
@@ -78,5 +78,20 @@ int main(int argc,char**argv) {
  if(sceneTools.secondary->isHidden())return 20;
  sceneTools.secondaryButtons.first()->click();if(shortcut!=1)return 21;
  sceneTools.setExpanded(false);sceneTools.settleMotion();if(!sceneTools.secondary->isHidden()&&sceneTools.secondary->isVisible())return 22;
+ Row compact("Scene title",true,false,0);
+ compact.setPalette(pal);compact.setAutoFillBackground(true);
+ compact.setDisclosure(true,false);
+ compact.addSceneActivation(true,false,false,[]{});
+ compact.addHover("Add source","plus",[]{},true);
+ compact.addHover("More actions","more",[]{},true);
+ compact.resize(400,compact.sizeHint().height());compact.show();app.processEvents();
+ auto *activation=compact.hoverButtons.first();
+ if(activation->geometry().right()<=compact.hoverButtons.last()->geometry().right())return 23;
+ auto margins=compact.layout()->contentsMargins();
+ if(margins.top()>2||margins.bottom()>2||margins.left()>6||margins.right()>6)return 24;
+ if(compact.name->fontMetrics().height()>compact.name->height())return 25;
+ compact.setSelected(true);app.processEvents();
+ auto surface=compact.grab().toImage();
+ if(surface.pixelColor(0,0)==surface.pixelColor(surface.width()/2,surface.height()/2))return 26;
  return 0;
 }

@@ -22,7 +22,7 @@
 enum class TypographyRole {Scene,Source,Status,Tab};
 inline QFont rowTypography(QFont font,TypographyRole role){
  font.setWeight(role==TypographyRole::Scene?QFont::DemiBold:role==TypographyRole::Tab?QFont::Medium:QFont::Normal);
- const qreal scale=role==TypographyRole::Status?.90:1.;
+ const qreal scale=role==TypographyRole::Scene?1.15:role==TypographyRole::Status?.90:1.;
  if(font.pointSizeF()>0)font.setPointSizeF(font.pointSizeF()*scale);
  else if(font.pixelSize()>0)font.setPixelSize(qMax(1,qRound(font.pixelSize()*scale)));
  return font;
@@ -100,7 +100,7 @@ public:
   sourceDimmed=dim;thumb->setDimmed(dim);applyInk();update();
  }
  void setNativeList(QListView *v){if(nativeList!=v){nativeList=v;applyGeometry();refreshRoles();applyInk();update();}}
- void setStatus(const QString&s){status->setFullText(s);status->setFont(rowTypography(font(),TypographyRole::Status));status->setFixedWidth(status->fontMetrics().horizontalAdvance(s)+2*themeSpacing(this,Qt::Horizontal));status->setVisible(!s.isEmpty());status->setToolTip(s);}
+ void setStatus(const QString&s){status->setFullText(s);status->setFont(rowTypography(font(),TypographyRole::Status));status->setFixedWidth(status->fontMetrics().horizontalAdvance(s)+qBound(2,themeSpacing(this,Qt::Horizontal),6));status->setVisible(!s.isEmpty());status->setToolTip(s);}
  QColor inkColor()const{
   const auto fg=selected?palette().color(QPalette::HighlightedText):isScene?roles.onHeader:branchEnabled?roles.onContainer:palette().color(QPalette::WindowText);
   if(!sourceDimmed)return fg;
@@ -119,14 +119,15 @@ public:
  void settleMotion(){secondaryReveal->finish();}
  bool expanded()const{return opened;}
  void addHover(const QString &tip,const QString&icon,std::function<void()> action,bool always=false){
-  auto *b=makeButton(tip,icon,std::move(action));if(icon=="arrow-right"||icon=="live"||icon=="plus")static_cast<GlyphButton*>(b)->setCircular(true);first->addWidget(b);hoverButtons.append(b);
+  auto *b=makeButton(tip,icon,std::move(action));if(icon=="arrow-right"||icon=="live"||icon=="plus")static_cast<GlyphButton*>(b)->setCircular(true);if(activationButton)first->insertWidget(first->indexOf(activationButton),b);else first->addWidget(b);hoverButtons.append(b);
   b->setProperty("always",always);auto p=b->sizePolicy();p.setRetainSizeWhenHidden(true);b->setSizePolicy(p);static_cast<GlyphButton*>(b)->revealAction(always||underMouse());
  }
  void addSceneActivation(bool live,bool studio,bool preview,std::function<void()> action){
   const bool statusOnly=live&&(!studio||preview);
   const auto tip=live?(statusOnly?"Live scene":"Live scene — select for preview"):(studio?"Select preview scene":"Activate scene");
   addHover(tip,live?"live":"arrow-right",[statusOnly,action=std::move(action)]{if(!statusOnly&&action)action();},live);
-  if(statusOnly)static_cast<GlyphButton*>(hoverButtons.last())->setIndicatorOnly(true);
+  activationButton=hoverButtons.last();
+  if(statusOnly)static_cast<GlyphButton*>(activationButton)->setIndicatorOnly(true);
  }
  void addSecondary(const QString &tip,const QString&icon,std::function<void()> action){
   auto *b=makeButton(tip,icon,std::move(action));extra->addWidget(b);secondaryButtons.append(b);
@@ -135,8 +136,9 @@ protected:
  void paintEvent(QPaintEvent*event) override{
   QWidget::paintEvent(event);QPainter p(this);p.setRenderHint(QPainter::Antialiasing);
   const auto h=themeSpacing(this,Qt::Horizontal),v=themeSpacing(this,Qt::Vertical);
-  const qreal radius=qBound(3,h+v/2,12);
-  const QRectF surface=QRectF(rect()).adjusted(qMax(1,h/2),isScene?2:0,-qMax(1,h/2),isScene?-2:0);
+  const qreal radius=qBound(8,h+v/2+3,14);
+  const int edge=qBound(1,h/3,3);
+  const QRectF surface=QRectF(rect()).adjusted(edge,isScene?1:0,-edge,isScene?-1:0);
   const auto pal=nativeList?nativeList->palette():palette();
   const bool moving=parentWidget()&&parentWidget()->property("unsceneReordering").toBool();
   // A shared surface extends through the middle rows of a scene branch.
@@ -157,12 +159,11 @@ protected:
   QPainterPath rounded;rounded.addRoundedRect(rowSurface,radius,radius);
   if(isScene&&!selected)
    p.fillPath(rounded,roles.header);
-  if(selected||(hoverAmount>0&&!isScene&&!branchEnabled&&!accentColor.isValid())){
-   p.save();p.setClipPath(rounded);if(!selected)p.setOpacity(hoverAmount);
-   auto*view=nativeList?static_cast<QWidget*>(nativeList.data()):this;
-   QStyleOptionViewItem opt;opt.initFrom(view);opt.rect=rowSurface.toAlignedRect();opt.state=QStyle::State_Enabled|QStyle::State_Active|(selected?QStyle::State_Selected:QStyle::State_MouseOver);opt.showDecorationSelected=true;
-   view->style()->drawControl(QStyle::CE_ItemViewItem,&opt,&p,view);
-   p.restore();
+  // Draw the theme selection as an antialiased path, rather than clipping a
+  // square native item painter (raster clip edges can look visibly jagged).
+  if(selected)p.fillPath(rounded,palette().color(QPalette::Highlight));
+  else if(hoverAmount>0&&!isScene&&!branchEnabled&&!accentColor.isValid()){
+   auto layer=pal.color(QPalette::Highlight);layer.setAlphaF(.14*hoverAmount);p.fillPath(rounded,layer);
   }
   if(!selected&&hoverAmount>0&&(isScene||branchEnabled||accentColor.isValid())){
    auto layer=inkColor();layer.setAlphaF(.08*hoverAmount);p.fillPath(rounded,layer);
@@ -178,7 +179,7 @@ protected:
    p.drawRoundedRect(indicator,barWidth/2,barWidth/2);
   }
   if(dropEdge){QPen pen(palette().color(QPalette::Highlight));pen.setWidth(2);p.setPen(pen);if(dropEdge==2){p.setBrush(Qt::NoBrush);p.drawRoundedRect(rowSurface.adjusted(1,1,-1,-1),radius,radius);}else{int y=dropEdge<0?1:height()-2;p.drawLine(outerLeft(),y,width()-2,y);}}
-  if(opened&&!secondaryButtons.isEmpty()){auto divider=inkColor();divider.setAlpha(32);p.setPen(divider);const int y=secondaryReveal->geometry().top()-1;p.drawLine(outerLeft(),y,width()-5,y);}
+  if(opened&&!secondaryButtons.isEmpty()){auto divider=inkColor();divider.setAlpha(32);p.setPen(divider);const int y=secondaryReveal->geometry().top()-1;const int left=qMax(outerLeft(),qCeil(rowSurface.left()+radius/2));const int right=qFloor(rowSurface.right()-radius/2);if(left<right)p.drawLine(left,y,right,y);}
  }
  void contextMenuEvent(QContextMenuEvent*e)override{if(onAppearance){onAppearance();e->accept();}else QWidget::contextMenuEvent(e);}
  void enterEvent(QEnterEvent *e)override{animateHover(1);for(auto*b:hoverButtons)static_cast<GlyphButton*>(b)->revealAction(true);update();QWidget::enterEvent(e);}
@@ -212,7 +213,7 @@ private:
  void refreshRoles(){const auto pal=nativeList?nativeList->palette():palette();roles=sceneSurfaceRoles(pal,isScene?accentColor:branchColor);accentRoles=sceneSurfaceRoles(pal,accentColor);}
  QVariantAnimation rowHover;qreal hoverAmount=0;
  void animateHover(qreal target){rowHover.stop();if(!duration){hoverAmount=target;update();return;}rowHover.setDuration(duration);rowHover.setStartValue(hoverAmount);rowHover.setEndValue(target);rowHover.start();}
- QHBoxLayout *first,*extra;GlyphButton*disclosure;ElidedLabel*status;QPointer<QListView>nativeList;
+ QHBoxLayout *first,*extra;GlyphButton*disclosure;QToolButton*activationButton=nullptr;ElidedLabel*status;QPointer<QListView>nativeList;
  int outerLeft()const{return layout()->contentsMargins().left();}
  void applyGeometry(){
   name->setFont(rowTypography(font(),isScene?TypographyRole::Scene:TypographyRole::Source));
@@ -221,12 +222,14 @@ private:
   auto*view=nativeList?static_cast<QWidget*>(nativeList.data()):this;
   const QSize content(name->fontMetrics().horizontalAdvance("M"),name->fontMetrics().height());
   const auto native=nativeItemSize(view,content);
-  const auto insetX=qBound(2,(native.width()-content.width())/2,16);
-  const auto insetY=qBound(1,(native.height()-content.height())/2,12);
-  const int indent=disclosure->sizeHint().width()+h;
+  const auto insetX=qBound(3,(native.width()-content.width())/2,6);
+  const auto insetY=qBound(1,(native.height()-content.height())/4,2);
+  const int indent=qMax(10,disclosure->sizeHint().width()*2/3)+qBound(1,h/2,4);
   layout()->setContentsMargins(insetX+nestDepth*indent,insetY,insetX,insetY);
-  layout()->setSpacing(qMax(1,v/2));first->setSpacing(h);extra->setSpacing(h);
-  top->setMinimumHeight(qMax(name->fontMetrics().height(),native.height()-2*insetY));
+  layout()->setSpacing(qBound(0,v/3,2));first->setSpacing(qBound(2,h/2,4));extra->setSpacing(qBound(1,h/3,3));
+  // Preserve explicit theme minimums while removing redundant content padding.
+  const int themeFloor=nativeItemSize(view,QSize(0,0)).height();
+  top->setMinimumHeight(qMax(name->fontMetrics().height(),themeFloor-2*insetY));
   ready=true;updateGeometry();
  }
  void styleControl(GlyphButton*b){
