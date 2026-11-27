@@ -1046,7 +1046,7 @@ class Dock : public QWidget {
    auto&list=*static_cast<QVector<SourceChoice>*>(opaque);
    if(obs_source_get_type(s)!=OBS_SOURCE_TYPE_INPUT||obs_source_removed(s)||obs_source_is_group(s)||obs_source_is_scene(s))return true;
    auto name=QString::fromUtf8(obs_source_get_name(s));auto id=uuid(s);
-   if(!name.isEmpty()&&!id.isEmpty())list.append({id,name});
+   if(!name.isEmpty()&&!id.isEmpty())list.append({id,name,false,{},QString::fromUtf8(obs_source_get_unversioned_id(s))});
    return true;
   },&existing);
   QSet<QString> seen;
@@ -1058,16 +1058,24 @@ class Dock : public QWidget {
    if(seen.contains(QString::fromUtf8(base)))continue;
    auto label=QString::fromUtf8(obs_source_get_display_name(id));
    if(label.isEmpty())continue;
-   seen.insert(QString::fromUtf8(base));types.append({QString::fromUtf8(id),label,true});
+   seen.insert(QString::fromUtf8(base));types.append({QString::fromUtf8(id),label,true,{},QString::fromUtf8(base)});
   }
-  auto decorate=[this](SourceChoice&choice,int kind){
-   Node sample;sample.iconType=kind;choice.icon=QIcon(glyphPixmap(sourceGlyph(sample),palette().color(QPalette::WindowText),18,devicePixelRatioF()));
+  auto decorate=[this](SourceChoice&choice,int kind,uint32_t flags){
+   Node sample;sample.iconType=kind;sample.video=flags&OBS_SOURCE_VIDEO;sample.audio=flags&OBS_SOURCE_AUDIO;
+   auto*window=static_cast<QWidget*>(obs_frontend_get_main_window());
+   if(window)choice.icon=qvariant_cast<QIcon>(window->property(nativeIconProperty(sample)));
+   if(choice.icon.isNull())choice.icon=QIcon(glyphPixmap(sourceGlyph(sample),palette().color(QPalette::WindowText),18,devicePixelRatioF()));
+   if(!choice.create){
+    const auto cached=thumbnails.lookup(choice.id);
+    if(!cached.isNull())choice.icon=QIcon(cached);
+   }
   };
-  for(auto&e:existing){auto s=source(e.id);if(s)decorate(e,obs_source_get_icon_type(obs_source_get_id(s.get())));}
-  for(auto&t:types)decorate(t,obs_source_get_icon_type(t.id.toUtf8().constData()));
+  for(auto&e:existing){auto s=source(e.id);if(s)decorate(e,obs_source_get_icon_type(obs_source_get_id(s.get())),obs_source_get_output_flags(s.get()));}
+  for(auto&t:types)decorate(t,obs_source_get_icon_type(t.id.toUtf8().constData()),obs_get_source_output_flags(t.id.toUtf8().constData()));
   SourcePicker picker(n.title,existing,types,this);
   if(picker.exec()!=QDialog::Accepted||!sameCollection(expected))return;
-  auto choice=picker.choice();if(choice.id.isEmpty())return;
+  const auto choices=picker.choices();if(choices.isEmpty())return;
+  const auto choice=choices.first();const bool visible=picker.initialVisibility();
   QString name;
   if(choice.create){
    name=choice.label;
@@ -1077,14 +1085,29 @@ class Dock : public QWidget {
    Source used(obs_get_source_by_name(name.toUtf8().constData()),obs_source_release);
    if(used){QMessageBox::warning(this,"Unscene","That source name is already in use.");return;}
   }
-  auto target=source(n.uid);auto*scene=target?obs_scene_from_source(target.get()):nullptr;
+  auto target=source(n.uid);auto*scene=target&&!obs_source_removed(target.get())?obs_scene_from_source(target.get()):nullptr;
   if(!scene||!sameCollection(expected))return;
-  Source input(choice.create?obs_source_create(choice.id.toUtf8().constData(),name.toUtf8().constData(),nullptr,nullptr):obs_get_source_by_uuid(choice.id.toUtf8().constData()),obs_source_release);
-  if(!input||obs_source_removed(input.get())||obs_source_get_type(input.get())!=OBS_SOURCE_TYPE_INPUT||obs_source_is_group(input.get())||obs_source_is_scene(input.get())||!obs_scene_add(scene,input.get())){
-   QMessageBox::warning(this,"Unscene","Could not add the source to this scene.");return;
+  // Resolve every UUID before mutating the destination; no partial batch
+  // if a selected source disappeared while the picker was open.
+  std::vector<Source> inputs;
+  for(const auto&selected:choices){
+   Source input(selected.create?obs_source_create(selected.id.toUtf8().constData(),name.toUtf8().constData(),nullptr,nullptr):obs_get_source_by_uuid(selected.id.toUtf8().constData()),obs_source_release);
+   if(!input||obs_source_removed(input.get())||obs_source_get_type(input.get())!=OBS_SOURCE_TYPE_INPUT||obs_source_is_group(input.get())||obs_source_is_scene(input.get())){
+    QMessageBox::warning(this,"Unscene","A selected source is no longer available.");return;
+   }
+   inputs.push_back(std::move(input));
+  }
+  QVector<obs_sceneitem_t*> added;
+  for(const auto&input:inputs){
+   auto*item=obs_scene_add(scene,input.get());
+   if(!item){
+    for(auto*created:added)obs_sceneitem_remove(created);
+    QMessageBox::warning(this,"Unscene","Could not add the selected sources to this scene.");return;
+   }
+   obs_sceneitem_set_visible(item,visible);added.append(item);
   }
   revealScene(n);
-  if(choice.create&&obs_source_configurable(input.get()))obs_frontend_open_source_properties(input.get());
+  if(choice.create&&obs_source_configurable(inputs.front().get()))obs_frontend_open_source_properties(inputs.front().get());
  }
  bool canPaste(bool duplicate){
   if(!copied)return false;

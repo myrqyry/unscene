@@ -100,3 +100,5 @@ Private scene, source, placement and filter notes share Aftermarket’s UUID-key
 Scene headers expand/collapse their source cards from any non-button area. Contiguous source bands retain the scene’s tonal color, notes and alternating-row preferences.
 
 Expanded scene headers provide native Filters and Projector shortcuts. Visual source projectors offer aspect-aware compact monitoring and large review windows, along with native windowed/fullscreen options.
+
+The Add Source popup follows Aftermarket’s compact Add new / Add existing layout, supports type-filtered multi-selection and initial visibility, and can target inactive scenes without switching them.
