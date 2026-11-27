@@ -17,6 +17,7 @@
 #include <QToolBar>
 #include "appearance-dialog.hpp"
 #include "navigation.hpp"
+#include "scene-folders.hpp"
 #include "source-picker.hpp"
 #include "item-copy.hpp"
 #include "native-menu.hpp"
@@ -62,13 +63,13 @@ Source source(const QString &uuid){return Source(obs_get_source_by_uuid(uuid.toU
 QString uuid(obs_source_t*s){return s?QString::fromUtf8(obs_source_get_uuid(s)):QString();}
 struct Node {
  QString key,uid,parent,title; int iconType=0; bool muted=false; int64_t id=0; int depth=0;
- bool scene=false,group=false,visible=true,locked=false,program=false,preview=false,video=false,audio=false;
- bool operator==(const Node &b)const {return key==b.key&&uid==b.uid&&parent==b.parent&&title==b.title&&iconType==b.iconType&&muted==b.muted&&id==b.id&&depth==b.depth&&scene==b.scene&&group==b.group&&visible==b.visible&&locked==b.locked&&program==b.program&&preview==b.preview&&video==b.video&&audio==b.audio;}
+ bool scene=false,group=false,folder=false,visible=true,locked=false,program=false,preview=false,video=false,audio=false;
+ bool operator==(const Node &b)const {return key==b.key&&uid==b.uid&&parent==b.parent&&title==b.title&&iconType==b.iconType&&muted==b.muted&&id==b.id&&depth==b.depth&&scene==b.scene&&group==b.group&&folder==b.folder&&visible==b.visible&&locked==b.locked&&program==b.program&&preview==b.preview&&video==b.video&&audio==b.audio;}
 };
 Node makeNode(obs_source_t *s){Node n; n.uid=uuid(s); n.title=QString::fromUtf8(obs_source_get_name(s)); auto flags=obs_source_get_output_flags(s); n.iconType=obs_source_get_icon_type(obs_source_get_id(s));n.muted=obs_source_muted(s);n.video=flags&OBS_SOURCE_VIDEO; n.audio=flags&OBS_SOURCE_AUDIO; return n;}
 QString sourceGlyph(const Node&n){
  if(n.scene)return "layers";
- if(n.group)return "folder";
+ if(n.group||n.folder)return "folder";
  switch(n.iconType){
  case OBS_ICON_TYPE_IMAGE:case OBS_ICON_TYPE_SLIDESHOW:return "image";
  case OBS_ICON_TYPE_COLOR:return "color";
@@ -85,7 +86,7 @@ QString sourceGlyph(const Node&n){
 }
 const char* nativeIconProperty(const Node&n){
  if(n.scene)return "sceneIcon";
- if(n.group)return "groupIcon";
+ if(n.group||n.folder)return "groupIcon";
  switch(n.iconType){
  case OBS_ICON_TYPE_IMAGE:return "imageIcon";
  case OBS_ICON_TYPE_COLOR:return "colorIcon";
@@ -523,6 +524,8 @@ class Dock : public QWidget {
  QElapsedTimer clock;
  AppearanceStore appearances{configPath("appearance.ini")};
  NavigationStore navigation{configPath("navigation.ini")};
+ SceneFolderStore folderStore{configPath("scene-folders.ini")};
+ SceneFolders folders;
  Density sceneDensity=navigation.sceneDensity(),sourceDensity=navigation.sourceDensity();
  QLineEdit*search;
  GlyphButton *collapse,*expand;
@@ -568,16 +571,16 @@ class Dock : public QWidget {
   updateDropMarker(it->node,dragPosition);updateDragScroll();
  }
  std::optional<QPair<Node,bool>> dropTarget(const Node&from,QPoint pos){
-  if(from.scene||from.locked||searching()||!sameCollection(collection)||!scroll->viewport()->rect().contains(scroll->viewport()->mapFromGlobal(pos)))return {};
+  if(from.scene||from.folder||from.locked||searching()||!sameCollection(collection)||!scroll->viewport()->rect().contains(scroll->viewport()->mapFromGlobal(pos)))return {};
   for(auto&entry:rowEntries){
-   const auto&n=entry.node;if(n.scene||n.key==from.key||n.parent!=from.parent)continue;
+   const auto&n=entry.node;if(n.scene||n.folder||n.key==from.key||n.parent!=from.parent)continue;
    auto*r=entry.row;if(!r->isVisible())continue;
    auto local=r->mapFromGlobal(pos);
    if(r->rect().contains(local))return QPair<Node,bool>{n,local.y()<r->height()/2};
   }return {};
  }
  bool dragMove(const Node&from,QPoint pos){
-  if(stopping||searching()||from.scene||from.locked||!sameCollection(collection))return false;
+  if(stopping||searching()||from.scene||from.folder||from.locked||!sameCollection(collection))return false;
   if(rows->moving())rows->finish();
   if(dragKey!=from.key){clearDrag();dragKey=from.key;dragCollection=collection;}
   dragPosition=pos;
@@ -651,15 +654,66 @@ class Dock : public QWidget {
  }
 
  bool searching()const{return !query.trimmed().isEmpty();}
- Density density(const Node&n)const{return n.scene?sceneDensity:sourceDensity;}
+ Density density(const Node&n)const{return n.folder?Density::Compact:n.scene?sceneDensity:sourceDensity;}
  void saveOpened(){if(!collection.isEmpty()&&!navigation.saveOpened(collection,opened))blog(LOG_WARNING,"[Unscene] Could not save expansion settings");}
  void changeDensity(bool scenes,Density d){
   (scenes?sceneDensity:sourceDensity)=d;
   if(!navigation.saveDensity(sceneDensity,sourceDensity))blog(LOG_WARNING,"[Unscene] Could not save density settings");
   dirty=true;request();
  }
+ bool saveFolders(const SceneFolders&next,const QString&expected){
+  if(!sameCollection(expected))return false;
+  if(!folderStore.save(expected,next)){QMessageBox::warning(this,"Unscene","Could not save scene folders.");return false;}
+  folders=next;animateStructure=true;dirty=true;request();return true;
+ }
+ void newFolder(const QString&parent,const QString&expected){
+  if(!sameCollection(expected))return;
+  QScopedValueRollback<bool> guard(editingAppearance,true);
+  bool ok=false;auto name=QInputDialog::getText(this,"New scene folder","Folder name",QLineEdit::Normal,"New folder",&ok).trimmed();
+  if(!ok||name.isEmpty()||!sameCollection(expected))return;
+  auto next=folders;auto id=next.add(name,parent);
+  if(id.isEmpty()){QMessageBox::information(this,"Unscene","Folder limit reached or parent unavailable.");return;}
+  if(saveFolders(next,expected)){opened.insert(id);if(!parent.isEmpty())opened.insert(parent);saveOpened();}
+ }
+ void moveFolderMenu(QMenu&menu,const Node&n,const QString&expected){
+  auto*sub=menu.addMenu("Move to folder");
+  auto parent=n.folder?folders.parentOfFolder(n.key):folders.parentOfScene(n.uid);
+  auto add=[&](const QString&id,const QString&title){
+   auto candidate=folders;bool valid=n.folder?candidate.moveFolder(n.key,id):candidate.moveScene(n.uid,id);
+   auto*a=sub->addAction(title);a->setEnabled(valid&&id!=parent);
+   connect(a,&QAction::triggered,this,[this,n,id,expected]{
+    if(!sameCollection(expected))return;
+    if(!n.folder){auto scene=source(n.uid);if(!scene||obs_source_removed(scene.get())||!obs_scene_from_source(scene.get()))return;}
+    auto next=folders;if(!(n.folder?next.moveFolder(n.key,id):next.moveScene(n.uid,id)))return;
+    if(saveFolders(next,expected)&&!id.isEmpty()){for(auto current=id;!current.isEmpty();current=folders.parentOfFolder(current))opened.insert(current);saveOpened();}
+   });
+  };
+  add({},"Top level");for(const auto&f:folders.folders())add(f.id,folders.path(f.id));
+ }
+ void folderMenu(const Node&n,const QPoint&pos){
+  auto expected=collection;if(!sameCollection(expected)||!folders.contains(n.key))return;
+  QMenu menu(this);
+  auto*create=menu.addAction("New subfolder…");
+  connect(create,&QAction::triggered,this,[this,n,expected]{QTimer::singleShot(0,this,[this,n,expected]{newFolder(n.key,expected);});});
+  moveFolderMenu(menu,n,expected);
+  auto*rename=menu.addAction("Rename folder…");
+  connect(rename,&QAction::triggered,this,[this,n,expected]{QTimer::singleShot(0,this,[this,n,expected]{
+   if(!sameCollection(expected))return;QScopedValueRollback<bool> guard(editingAppearance,true);
+   bool ok=false;auto name=QInputDialog::getText(this,"Rename folder","Name",QLineEdit::Normal,n.title,&ok).trimmed();
+   if(ok&&sameCollection(expected)){auto next=folders;if(next.rename(n.key,name))saveFolders(next,expected);}
+  });});
+  auto*appearance=menu.addAction("Appearance…");connect(appearance,&QAction::triggered,this,[this,n]{queueAppearance(n);});
+  auto*remove=menu.addAction("Remove folder (keep contents)");
+  connect(remove,&QAction::triggered,this,[this,n,expected]{
+   if(!sameCollection(expected))return;auto next=folders;
+   if(next.remove(n.key)&&saveFolders(next,expected)){opened.remove(n.key);saveOpened();}
+  });
+  menu.exec(pos);
+ }
  void densityMenu(QWidget*anchor){
   QMenu menu(this);
+  auto*folder=menu.addAction("New scene folder…");auto expected=collection;connect(folder,&QAction::triggered,this,[this,expected]{QTimer::singleShot(0,this,[this,expected]{newFolder({},expected);});});
+  menu.addSeparator();
   for(bool scenes:{true,false}){
    auto*sub=menu.addMenu(scenes?"Scene thumbnails":"Source thumbnails");
    auto*group=new QActionGroup(sub);group->setExclusive(true);
@@ -996,6 +1050,7 @@ class Dock : public QWidget {
    menu.addSeparator();
   }
   if(n.scene){
+   moveFolderMenu(menu,n,expected);
    auto*add=menu.addAction("Add source…");connect(add,&QAction::triggered,this,[this,n]{QTimer::singleShot(0,this,[this,n]{addSource(n);});});
    auto*ref=menu.addAction("Paste (reference)");ref->setEnabled(canPaste(false));
    connect(ref,&QAction::triggered,this,[this,n,expected]{if(sameCollection(expected))QTimer::singleShot(0,this,[this,n,expected]{if(sameCollection(expected))pasteSource(n,false);});});
@@ -1051,7 +1106,7 @@ class Dock : public QWidget {
   }
  }
  void collect(obs_scene_t *scene,const QString &path,int depth,QVector<Node>&out) {
-  if(!scene||depth>maxDepth)return;
+  if(!scene||path.count('/')>=maxDepth)return;
   struct Context {QVector<Node> nodes; QString parent,path; int depth;};
   Context c{{},uuid(obs_scene_get_source(scene)),path,depth};
   obs_scene_enum_items(scene,[](obs_scene_t*,obs_sceneitem_t *item,void *p){
@@ -1072,8 +1127,8 @@ class Dock : public QWidget {
  void request(){if(pending||stopping)return;pending=true;QTimer::singleShot(0,this,[this]{pending=false;refresh();});}
  void toggle(const Node &n){
   animateStructure=true;
-  if((n.scene||n.group)&&!searching()){if(opened.contains(n.key))opened.remove(n.key);else opened.insert(n.key);saveOpened();}
-  if(!n.scene){selected=selected==n.key?QString():n.key;if(!selected.isEmpty())inspect(n,false);}
+  if((n.scene||n.group||n.folder)&&!searching()){if(opened.contains(n.key))opened.remove(n.key);else opened.insert(n.key);saveOpened();}
+  if(!n.scene&&!n.folder){selected=selected==n.key?QString():n.key;if(!selected.isEmpty())inspect(n,false);}
   dirty=true;request();
  }
  void render(const QVector<Node>&nodes){
@@ -1124,14 +1179,14 @@ class Dock : public QWidget {
    if(!fresh&&!(found->node==n)){rows->removeWidget(found->shell);delete found->shell;rowEntries.erase(found);fresh=true;}
    Row*r;Reveal*shell;
    if(fresh){
-    r=new Row(n.title,n.scene,expanded,n.depth);
+    r=new Row(n.title,n.scene||n.folder,expanded,n.depth);
     shell=new Reveal(r,body,true);
     rowEntries.insert(n.key,{n,r,shell});
    }else{r=found->row;shell=found->shell;}
    r->setMotionDuration(fresh?0:motionDuration);
    r->setExpanded(expanded);
    r->setNativeList(nativeList);
-   r->setDisclosure(n.scene||n.group,isOpen);
+   r->setDisclosure(n.scene||n.group||n.folder,isOpen);
    r->thumb->setFixedSize(thumbnailSize(density(n),n.scene));
    r->setSelected(n.program||n.preview||expanded);
    r->setSourceVisible(n.visible);
@@ -1144,17 +1199,19 @@ class Dock : public QWidget {
    const auto art=appearancePixmap(appearance,artworkPalette(r),r->thumb->size());
    if(!art.isNull()){artworkOverrides.insert(n.uid);r->thumb->setPixmap(art);}
    r->setAccent(appearance.color);
-   if(n.scene)sceneColor=appearance.color;
-   else r->setBranchColor(sceneColor,nodeIndex==0||nodes[nodeIndex-1].scene,nodeIndex+1==nodes.size()||nodes[nodeIndex+1].scene);
+   if(n.scene||n.folder)sceneColor=appearance.color;
+   else r->setBranchColor(sceneColor,nodeIndex==0||nodes[nodeIndex-1].scene||nodes[nodeIndex-1].folder,nodeIndex+1==nodes.size()||nodes[nodeIndex+1].scene||nodes[nodeIndex+1].folder);
    if(fresh){
-   r->onAppearance=[this,n]{queueNativeContext(n);};
+   r->onAppearance=[this,n]{if(n.folder){auto pos=QCursor::pos();QTimer::singleShot(0,this,[this,n,pos]{folderMenu(n,pos);});}else queueNativeContext(n);};
    r->onBody=[this,n]{toggle(n);};
-   if(!n.scene&&!n.locked){
+   if(!n.scene&&!n.folder&&!n.locked){
     r->onDragMove=[this,n](QPoint pos){return dragMove(n,pos);};
     r->onDrop=[this,n](QPoint pos){finishDrag(n,pos);};
     r->onDragCancel=[this]{clearDrag();};
    }
-   if(n.scene){
+   if(n.folder){
+    r->addHover("Folder actions","more",[this,n]{auto pos=QCursor::pos();QTimer::singleShot(0,this,[this,n,pos]{folderMenu(n,pos);});});
+   }else if(n.scene){
     r->addSceneActivation(n.program,obs_frontend_preview_program_mode_active(),n.preview,[this,n]{auto s=source(n.uid);if(!s||!obs_scene_from_source(s.get()))return;if(obs_frontend_preview_program_mode_active())obs_frontend_set_current_preview_scene(s.get());else obs_frontend_set_current_scene(s.get());request();});
     r->addHover("Add source","plus",[this,n]{QTimer::singleShot(0,this,[this,n]{addSource(n);});});
     r->addHover("More actions","more",[this,n]{queueContext(n);});
@@ -1209,10 +1266,12 @@ public:
   auto*refreshButton=new GlyphButton("refresh",bar);refreshButton->setToolTip("Refresh snapshots (when idle capture is enabled and outputs are idle)");
   connect(refreshButton,&QToolButton::clicked,this,[this,refreshButton]{refreshButton->spin();if(!captureAllowed())return;thumbnails.clear();attempted.clear();dirty=true;request();});
   auto*settingsButton=new GlyphButton("properties",bar);settingsButton->setToolTip("Dock settings");settingsButton->setAccessibleName("Dock settings");
-  toolbar={refreshButton,collapse,expand,settingsButton};for(auto*b:toolbar)b->setMotionDuration(motionDuration);
+  auto*newFolderButton=new GlyphButton("folder",bar);newFolderButton->setToolTip("New scene folder");newFolderButton->setAccessibleName("New scene folder");
+  connect(newFolderButton,&QToolButton::clicked,this,[this]{newFolder({},collection);});
+  toolbar={refreshButton,collapse,expand,newFolderButton,settingsButton};for(auto*b:toolbar)b->setMotionDuration(motionDuration);
   connect(settingsButton,&QToolButton::clicked,this,[this,settingsButton]{densityMenu(settingsButton);});
   search=new QLineEdit(bar);search->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);search->setPlaceholderText("Find scenes or sources…");search->setClearButtonEnabled(true);search->setAccessibleName("Find scenes or sources");search->setMinimumWidth(50);
-  bar->addWidget(search);bar->addWidget(refreshButton);bar->addWidget(collapse);bar->addWidget(expand);bar->addWidget(settingsButton);l->addWidget(bar);
+  bar->addWidget(search);bar->addWidget(refreshButton);bar->addWidget(collapse);bar->addWidget(expand);bar->addWidget(newFolderButton);bar->addWidget(settingsButton);l->addWidget(bar);
   connect(search,&QLineEdit::textChanged,this,[this](const QString&t){query=t;animateStructure=true;collapse->setEnabled(!searching());expand->setEnabled(!searching());dirty=true;request();});
   scroll=new QScrollArea(this);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);body=new QWidget;rows=new ReorderLayout(body);rows->setContentsMargins(0,0,0,0);rows->setSpacing(1);scroll->setWidget(body);
   splitter=new QSplitter(Qt::Vertical,this);splitter->setChildrenCollapsible(false);splitter->addWidget(scroll);
@@ -1242,16 +1301,28 @@ public:
  void refresh(){
   if(stopping||editingAppearance||!isVisible())return;
   char *raw=obs_frontend_get_current_scene_collection();QString now=QString::fromUtf8(raw?raw:"");bfree(raw);
-  if(collection!=now){closeInspector();resetRows=true;collection=now;copied.reset();thumbnails.clear();attempted.clear();opened.clear();selected.clear();initialized=false;dirty=true;}
+  if(collection!=now){closeInspector();resetRows=true;collection=now;folders=folderStore.load(now);copied.reset();thumbnails.clear();attempted.clear();opened.clear();selected.clear();initialized=false;dirty=true;}
   Source live(obs_frontend_get_current_scene(),obs_source_release);
   Source preview(obs_frontend_preview_program_mode_active()?obs_frontend_get_current_preview_scene():nullptr,obs_source_release);
   if(!initialized&&!now.isEmpty()){auto saved=navigation.opened(now);if(saved)opened=*saved;else if(live)opened.insert(uuid(live.get()));initialized=true;}
   obs_frontend_source_list list={};obs_frontend_get_scenes(&list);
   QVector<Node> nodes;sceneKeys.clear();
-  for(size_t i=0;i<list.sources.num;i++){
-   auto*s=list.sources.array[i];auto n=makeNode(s);n.scene=true;n.key=n.uid;n.program=s==live.get();n.preview=s==preview.get();nodes.append(n);sceneKeys.insert(n.key);
-   if(searching()||opened.contains(n.key))collect(obs_scene_from_source(s),n.key,1,nodes);
-  }
+  for(const auto&f:folders.folders())sceneKeys.insert(f.id);
+  for(size_t i=0;i<list.sources.num;i++)sceneKeys.insert(uuid(list.sources.array[i]));
+  // The folder model is presentation-only; OBS retains the native scene list and source identity.
+  std::function<void(const QString&,int)> append=[&](const QString&parent,int depth){
+   for(const auto&f:folders.folders())if(f.parent==parent){
+    Node n;n.folder=true;n.key=n.uid=f.id;n.title=f.name;n.depth=depth;nodes.append(n);
+    if(searching()||opened.contains(n.key))append(n.key,depth+1);
+   }
+   for(size_t i=0;i<list.sources.num;i++){
+    auto*s=list.sources.array[i];auto n=makeNode(s);
+    if(folders.parentOfScene(n.uid)!=parent)continue;
+    n.scene=true;n.key=n.uid;n.depth=depth;n.program=s==live.get();n.preview=s==preview.get();nodes.append(n);
+    if(searching()||opened.contains(n.key))collect(obs_scene_from_source(s),n.key,depth+1,nodes);
+   }
+  };
+  append({},0);
   obs_frontend_source_list_free(&list);
   if(searching())nodes=filterHierarchy(nodes,query);
   if(dirty||nodes!=previous){previous=nodes;dirty=false;render(nodes);}

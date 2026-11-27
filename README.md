@@ -16,7 +16,7 @@ switching scenes. No Aftermarket dependency.
 
 ## Features
 
-- **Scenes and sources in one dock:** expand independently of activation; search
+- **Scenes and sources in one dock:** nested organization-only scene folders; expand independently of activation; search
   collapsed scenes and groups; persistent expansion and thumbnail density.
 - **Dynamic appearance:** Material-inspired tonal scene containers, custom colors,
   artwork and icons, dimmed hidden sources, and theme-aware live/hover controls.
@@ -78,7 +78,7 @@ architecture; successful compilation does not establish native runtime support.
   show/hide transitions are not supported.
 - Optional idle snapshot capture uses synchronous graphics readback; disabled
   by default and gated while outputs are active. No streaming benchmark yet.
-- Cross-parent drag, full scene/group management and indirect nested scene
+- Scene/folder drag ordering, folder undo, cross-parent source drag, full scene/group management and indirect nested scene
   usage traversal are not implemented. This is not yet a complete native-dock
   replacement.
 
