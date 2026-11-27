@@ -13,6 +13,8 @@ Unscene is an independent native plugin for [OBS Studio](https://obsproject.com/
 using libobs, the OBS frontend API and Qt 6. It is not an official OBS Project
 product and does not require Aftermarket.
 
+Scene folder organization was inspired by [Scene Tree View](https://github.com/TheThirdRail/scene-tree-view); the implementation is independently authored.
+
 The inspector was inspired by [Source Inspector Dock](https://github.com/prgmitchell/source-inspector-dock).
 Portable single-source and filter JSON follows the native OBS serialization
 format used by [Source Copy](https://github.com/exeldro/obs-source-copy).

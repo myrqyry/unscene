@@ -17,7 +17,7 @@ driver at 875f6b1 (same project owner), without its websocket/runtime
 dependencies. Pinned source bytes and upstream dependency manifests are
 verified; exact source patches fail if the expected source differs. The
 Windows Qt SDK provides minimal rather than offscreen. Tests use isolated
-Xvfb for Linux libobs startup. All 18 tests remain required; JUnit rejects
+Xvfb for Linux libobs startup. All 19 current tests are required; JUnit rejects
 missing, failed, disabled or skipped cases. Source package and its binary
 payload manifest are produced only by the Linux OBS32 job.
 
@@ -61,3 +61,13 @@ Native downloads now use three bounded attempts for transient network
 failures, temporary files and digest verification before publication;
 checksum mismatches fail immediately. All 18 local CTests and four
 native adapter tests pass. New hosted qualification required.
+
+
+Hosted main run [45909441018](https://github.com/myrqyry/unscene/actions/runs/45909441018)
+completed successfully after the cross-platform fixes. Subsequent license-update
+run [45941592511](https://github.com/myrqyry/unscene/actions/runs/45941592511)
+passed seven of eight build legs; Linux OBS32 failed at filter-restore-test
+with graphics-context teardown warnings and a segmentation fault. This is not
+a verified license-related failure. The current scene organization/shortcut
+revision adds a nineteenth test and extends existing navigation, row and
+item-menu tests; new hosted results are required.

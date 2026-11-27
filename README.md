@@ -7,12 +7,12 @@ expandable, theme-aware workspace. Organize and edit sources without constantly
 switching scenes. No Aftermarket dependency.
 
 > **0.1.0 public-preview candidate.** Developed and runtime-tested on Linux x86_64
-> with OBS Studio 32.2.0 and Qt 6. Other OBS versions, Windows, macOS and Flatpak
-> packaging are not qualified yet.
+> with OBS Studio 32.2.0 and Qt 6. CI builds OBS 32/33 packages on Linux,
+> Windows and macOS; runtime qualification outside Linux OBS 32.2.0 is pending.
 
-| Dark theme | Light theme |
+| Current organization and shortcuts (dark) | Earlier light-theme preview |
 | :---: | :---: |
-| ![Scene hierarchy, dark theme](docs/screenshots/preview-dark.png) | ![Scene hierarchy, light theme](docs/screenshots/preview-light.png) |
+| ![Scene tabs, pinning, counts and ordering](docs/screenshots/scene-tabs.png) | ![Scene hierarchy, light theme](docs/screenshots/preview-light.png) |
 
 ## Features
 
@@ -33,7 +33,11 @@ switching scenes. No Aftermarket dependency.
 - **Motion and safety:** Off/Fast/Smooth motion settings, native OBS undo for
   supported edits, and no snapshot capture by default.
 
-![Source inspector](docs/screenshots/preview-inspector.png)
+| Source shortcuts | Search across tabs |
+| :---: | :---: |
+| ![Transform, transitions and blending shortcuts](docs/screenshots/source-shortcuts.png) | ![Search results across scene tabs](docs/screenshots/all-tabs-search.png) |
+
+[Transform inspector preview](docs/screenshots/preview-inspector.png)
 
 [Detailed usage and limitations](docs/usage.md) · [Build checks](https://github.com/myrqyry/unscene/actions)
 
@@ -60,8 +64,8 @@ Unscene plugin directory; appearance/navigation settings are separate.
 
 The [CI workflow](.github/workflows/ci.yml) targets Linux x86-64,
 Windows x64, and macOS Intel/Apple Silicon against pinned OBS 32.2.0 and
-33.0.3 SDKs. Each job requires at least 18 native tests before packaging.
-Hosted qualification of the expanded matrix is pending. See [CI details](docs/ci.md).
+33.0.3 SDKs. Each job requires at least 19 native tests before packaging.
+The earlier eight-leg matrix passed; the latest feature revision needs hosted requalification. See [CI details](docs/ci.md).
 
 CI artifacts are preview/test packages, not automatically published releases.
 OBS 32 Linux retains the original archive layout: extract into the Unscene
@@ -74,7 +78,7 @@ architecture; successful compilation does not establish native runtime support.
 ## Important limitations
 
 - Some direct management actions (add, reference/duplicate paste, remove,
-  rename) do not have native undo. Native menus may fall back to Unscene's own
+  rename, scene creation and duplication) do not have native undo. Native menus may fall back to Unscene's own
   menus if OBS's internal model cannot be matched safely.
 - Portable JSON does not package external files or remap third-party source
   references. Import only trusted settings. Scene/group bundles and item

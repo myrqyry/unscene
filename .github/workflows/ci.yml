@@ -17,4 +17,4 @@ jobs:
       profile: full
       driver: caller
       source-package: true
-      minimum-tests: 18
+      minimum-tests: 19
