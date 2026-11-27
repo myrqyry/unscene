@@ -93,5 +93,42 @@ int main(int argc,char**argv) {
  compact.setSelected(true);app.processEvents();
  auto surface=compact.grab().toImage();
  if(surface.pixelColor(0,0)==surface.pixelColor(surface.width()/2,surface.height()/2))return 26;
+ // Entire header (including the outside padding and status) toggles
+ // the hierarchy, while buttons remain independent.
+ Row header("Card",true,false,0);header.setPalette(pal);
+ header.setDisclosure(true,true);header.setStatus("PREVIEW");
+ header.addSecondary("In transition","transition-in",[&]{++shortcut;});
+ int toggled=0;header.onBody=[&]{++toggled;};header.resize(360,header.sizeHint().height());header.show();app.processEvents();
+ TestEvents::mouseClick(&header,Qt::LeftButton);if(toggled!=1)return 27;
+ auto*status=header.findChild<QLabel*>("unscene-row-status");
+ if(!status||!status->isVisible())return 28;
+ TestEvents::mouseClick(status,Qt::LeftButton);if(toggled!=2)return 28;
+ header.setExpanded(true);header.settleMotion();app.processEvents();
+ TestEvents::mouseClick(header.secondary,Qt::LeftButton);if(toggled!=3)return 29;
+ header.secondaryButtons.first()->click();if(toggled!=3||shortcut!=2)return 30;
+ header.setNote("Private",[&]{++shortcut;});header.findChild<QToolButton*>("unscene-note")->click();
+ if(toggled!=3||shortcut!=3)return 31;
+ header.addSceneActivation(true,false,false,[]{});
+ app.processEvents();TestEvents::mouseClick(header.hoverButtons.last(),Qt::LeftButton);
+ if(toggled!=3)return 34;
+ // A drag beginning on the title is still a drag, not a toggle.
+ int drops=0;header.onDragMove=[](QPoint){return true;};header.onDrop=[&](QPoint){++drops;};
+ TestEvents::mousePress(header.name,Qt::LeftButton);
+ auto start=header.name->rect().center(),end=start+QPoint(25,0);
+ QMouseEvent move(QEvent::MouseMove,QPointF(end),QPointF(header.name->mapToGlobal(end)),Qt::NoButton,Qt::LeftButton,Qt::NoModifier);
+ QApplication::sendEvent(header.name,&move);TestEvents::mouseRelease(header.name,Qt::LeftButton);
+ if(toggled!=3||drops!=1)return 35;
+ // Joined card geometry: the header has square lower corners; the first
+ // source has square upper corners, the last source rounds the bottom.
+ header.setAutoFillBackground(true);header.setExpanded(false);header.settleMotion();header.resize(360,header.sizeHint().height());
+ header.setCardHeader(false);app.processEvents();auto closed=header.grab().toImage();
+ header.setCardHeader(true);app.processEvents();auto joined=header.grab().toImage();
+ const int x=4,y=joined.height()-2;
+ if(closed.pixelColor(x,y)==joined.pixelColor(x,y))return 32;
+ Row firstSource("First",false,false,1),lastSource("Last",false,false,1);
+ for(auto*r:{&firstSource,&lastSource}){r->setPalette(pal);r->setAutoFillBackground(true);r->resize(360,32);r->show();}
+ firstSource.setBranchColor({},false,false);lastSource.setBranchColor({},false,true);app.processEvents();
+ const auto firstImage=firstSource.grab().toImage(),lastImage=lastSource.grab().toImage();
+ if(firstImage.pixelColor(4,1)!=lastImage.pixelColor(4,1)||firstImage.pixelColor(4,firstImage.height()-1)==lastImage.pixelColor(4,lastImage.height()-1))return 33;
  return 0;
 }

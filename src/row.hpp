@@ -1,5 +1,5 @@
-#include "context-appearance.hpp"
 #pragma once
+#include "context-appearance.hpp"
 #include <QWidget>
 #include <QLabel>
 #include <QToolButton>
@@ -96,6 +96,10 @@ public:
  }
  void setAccent(const QColor &color){if(accentColor!=color){accentColor=color;refreshRoles();applyInk();update();}}
  QColor accent()const{return accentColor;}
+ void setCardHeader(bool joined){
+  if(cardJoined==joined)return;
+  cardJoined=joined;update();
+ }
  void setBranchColor(const QColor&color,bool first,bool last){
   if(branchColor==color&&branchFirst==first&&branchLast==last&&branchEnabled)return;
   branchColor=color;branchFirst=first;branchLast=last;branchEnabled=true;refreshRoles();applyInk();update();
@@ -111,8 +115,15 @@ public:
   thumb=new SourceArtworkLabel(top);thumb->setFixedSize(scene?48:36,scene?27:22);thumb->setAlignment(Qt::AlignCenter);first->addWidget(thumb);
   name=new ElidedLabel(title,top);first->addWidget(name,1);
   name->installEventFilter(this);thumb->installEventFilter(this);top->installEventFilter(this);
-  status=new ElidedLabel("",top);status->hide();first->addWidget(status);status->setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Preferred);
+  status=new ElidedLabel("",top);status->setObjectName("unscene-row-status");status->hide();first->addWidget(status);status->setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Preferred);
   secondary=new QWidget(this);extra=new QHBoxLayout(secondary);extra->setContentsMargins(0,0,0,0);extra->addStretch();secondaryReveal=new Reveal(secondary,this);outer->addWidget(secondaryReveal);
+  if(isScene){
+   // Include the header padding, status, and empty shortcut-row space;
+   // real buttons own their own mouse events.
+   installEventFilter(this);status->installEventFilter(this);
+   secondary->installEventFilter(this);secondaryReveal->installEventFilter(this);
+   setCursor(Qt::PointingHandCursor);
+  }
   applyGeometry();refreshRoles();applyInk();setExpanded(open);
  }
  void setDisclosure(bool enabled,bool open){disclosure->setVisible(enabled);disclosure->setAngle(open?90:0);disclosure->setToolTip(open?"Collapse":"Expand");}
@@ -161,27 +172,28 @@ protected:
   const auto h=themeSpacing(this,Qt::Horizontal),v=themeSpacing(this,Qt::Vertical);
   const qreal radius=qBound(8,h+v/2+3,14);
   const int edge=qBound(1,h/3,3);
-  const QRectF surface=QRectF(rect()).adjusted(edge,isScene?1:0,-edge,isScene?-1:0);
-  const auto pal=nativeList?nativeList->palette():palette();
   const bool moving=parentWidget()&&parentWidget()->property("unsceneReordering").toBool();
-  // A shared surface extends through the middle rows of a scene branch.
-  // Keep both ends round, without introducing gaps between its sources.
-  QPainterPath branch;
-  branch.addRoundedRect(surface,radius,radius);
-  if(!isScene&&branchEnabled&&!moving){
-   if(!branchFirst)branch.addRect(QRectF(surface.left(),surface.top(),surface.width(),qMin(radius,surface.height())));
-   if(!branchLast)branch.addRect(QRectF(surface.left(),qMax(surface.top(),surface.bottom()-radius),surface.width(),qMin(radius,surface.height())));
-   branch.setFillRule(Qt::WindingFill);
-  }
+  const bool joined=isScene&&cardJoined&&!moving;
+  const bool inCard=!isScene&&branchEnabled&&!moving;
+  const QRectF surface=QRectF(rect()).adjusted(edge,isScene?2:0,-edge,
+      isScene?(joined?0:-2):(inCard&&branchLast?-2:0));
+  const auto pal=nativeList?nativeList->palette():palette();
+  // Build the contiguous card using rounded outer ends and square joins.
+  // The interior source bands span the same card edges as the header.
+  auto pathFor=[radius](const QRectF&r,bool roundTop,bool roundBottom){
+   QPainterPath path;path.addRoundedRect(r,radius,radius);
+   if(!roundTop)path.addRect(QRectF(r.left(),r.top(),r.width(),qMin(radius,r.height())));
+   if(!roundBottom)path.addRect(QRectF(r.left(),qMax(r.top(),r.bottom()-radius),r.width(),qMin(radius,r.height())));
+   path.setFillRule(Qt::WindingFill);return path;
+  };
+  const auto branch=pathFor(surface,!inCard||branchFirst,!inCard||branchLast);
   const auto base=pal.color(QPalette::Base);
   if(moving)p.fillRect(rect(),base);
-  if(!isScene&&branchEnabled){
-   p.fillPath(branch,roles.container);
-  }
-  const QRectF rowSurface=surface.adjusted(1,isScene?0:1,-1,isScene?0:-1);
-  QPainterPath rounded;rounded.addRoundedRect(rowSurface,radius,radius);
+  if(!isScene&&branchEnabled)p.fillPath(branch,roles.container);
+  const QRectF rowSurface=isScene?surface:surface.adjusted(1,1,-1,-1);
+  const auto rounded=isScene?pathFor(rowSurface,true,!joined):pathFor(rowSurface,true,true);
   if(!selected&&(isScene||striped))
-   p.fillPath(rounded,idleSurface());
+   p.fillPath(isScene?rounded:inCard?branch:rounded,idleSurface());
   // Draw the theme selection as an antialiased path, rather than clipping a
   // square native item painter (raster clip edges can look visibly jagged).
   if(selected)p.fillPath(rounded,palette().color(QPalette::Highlight));
@@ -211,7 +223,13 @@ protected:
  bool eventFilter(QObject *o,QEvent *e)override{
   if(e->type()==QEvent::ContextMenu&&onAppearance){onAppearance();return true;}
   if(e->type()==QEvent::MouseButtonPress){
-   auto*m=static_cast<QMouseEvent*>(e);if(m->button()==Qt::LeftButton){pressed=true;dragging=false;pressPoint=m->globalPosition().toPoint();return true;}
+   auto*m=static_cast<QMouseEvent*>(e);if(m->button()==Qt::LeftButton){
+    // An indicator-only button can ignore a mouse event, which Qt then
+    // propagates to its parent. A click on that button is not a header click.
+    for(auto*w=childAt(mapFromGlobal(m->globalPosition().toPoint()));w&&w!=this;w=w->parentWidget())
+     if(qobject_cast<QAbstractButton*>(w))return true;
+    pressed=true;dragging=false;pressPoint=m->globalPosition().toPoint();return true;
+   }
   }
   if(e->type()==QEvent::MouseMove&&pressed){
    auto*m=static_cast<QMouseEvent*>(e);auto pos=m->globalPosition().toPoint();
@@ -224,14 +242,14 @@ protected:
   if(e->type()==QEvent::MouseButtonRelease&&static_cast<QMouseEvent*>(e)->button()==Qt::LeftButton){
    auto*m=static_cast<QMouseEvent*>(e);bool wasDragging=dragging,wasPressed=pressed;pressed=dragging=false;
    if(wasDragging){if(onDrop)onDrop(m->globalPosition().toPoint());}
-   else if(wasPressed&&onBody)onBody();return true;
+   else if(wasPressed&&rect().contains(mapFromGlobal(m->globalPosition().toPoint()))&&onBody)onBody();return true;
   }
   if(e->type()==QEvent::UngrabMouse&&pressed){pressed=dragging=false;if(onDragCancel)onDragCancel();}
   return QWidget::eventFilter(o,e);
  }
 private:
  int dropEdge=0;bool pressed=false,dragging=false;QPoint pressPoint;
- bool isScene,opened=false,selected=false,sourceDimmed=false;int nestDepth=0;bool ready=false;QWidget*top=nullptr;QColor accentColor,branchColor;bool branchEnabled=false,branchFirst=true,branchLast=true; int duration=0;Reveal*secondaryReveal;
+ bool isScene,opened=false,selected=false,sourceDimmed=false;int nestDepth=0;bool ready=false;QWidget*top=nullptr;QColor accentColor,branchColor;bool branchEnabled=false,branchFirst=true,branchLast=true,cardJoined=false; int duration=0;Reveal*secondaryReveal;
  SceneSurfaceRoles roles,accentRoles;
  unscene::RowStripes stripes;bool striped=false,alternateRow=false;GlyphButton*noteBadge=nullptr;std::function<void()> noteAction;
  void refreshRoles(){const auto pal=nativeList?nativeList->palette():palette();roles=sceneSurfaceRoles(pal,isScene?accentColor:branchColor);accentRoles=sceneSurfaceRoles(pal,accentColor);}

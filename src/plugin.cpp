@@ -837,7 +837,7 @@ class Dock : public QWidget {
   auto s=source(id);if(!s||obs_source_removed(s.get())||!obs_scene_from_source(s.get()))return;
   search->clear();selectTab(folders.rootForScene(id));
   for(auto p=folders.parentOfScene(id);!p.isEmpty();p=folders.parentOfFolder(p))opened.insert(p);
-  selected=id;saveOpened();dirty=true;request();
+  opened.insert(id);selected=id;saveOpened();dirty=true;request();
   QTimer::singleShot(0,this,[this,id]{auto it=rowEntries.find(id);if(it!=rowEntries.end())scroll->ensureWidgetVisible(it->row);});
  }
  void toggleFavorite(const QString&id,const QString&expected){
@@ -1523,8 +1523,17 @@ class Dock : public QWidget {
  void request(){if(pending||stopping)return;pending=true;QTimer::singleShot(0,this,[this]{pending=false;refresh();});}
  void toggle(const Node &n){
   animateStructure=true;
-  if((n.group||n.folder)&&!searching()){if(opened.contains(n.key))opened.remove(n.key);else opened.insert(n.key);saveOpened();}
-  if(!n.folder){selected=selected==n.key?QString():n.key;if(!n.scene&&!selected.isEmpty())inspect(n,false);}
+  if(n.scene){
+   if(searching())return;
+   if(opened.contains(n.key)){
+    opened.remove(n.key);
+    if(selected==n.key||selected.startsWith(n.key+"/"))selected.clear();
+   }else opened.insert(n.key);
+   saveOpened();
+  }else{
+   if((n.group||n.folder)&&!searching()){if(opened.contains(n.key))opened.remove(n.key);else opened.insert(n.key);saveOpened();}
+   if(!n.folder){selected=selected==n.key?QString():n.key;if(!selected.isEmpty())inspect(n,false);}
+  }
   dirty=true;request();
  }
  void render(const QVector<Node>&nodes){
@@ -1569,7 +1578,9 @@ class Dock : public QWidget {
   QColor sceneColor;int sceneParity=0,sourceParity=0;
   for(int nodeIndex=0;nodeIndex<nodes.size();++nodeIndex){
    const auto&n=nodes[nodeIndex];
-   const bool isOpen=searching()||opened.contains(n.key), expanded=selected==n.key;
+   const bool isOpen=searching()||opened.contains(n.key);
+   const bool expanded=n.scene?(isOpen&&!searching()):selected==n.key;
+   const bool hasSources=n.scene&&nodeIndex+1<nodes.size()&&nodes[nodeIndex+1].key.startsWith(n.key+"/");
    auto found=rowEntries.find(n.key);
    bool fresh=found==rowEntries.end(),created=fresh;
    if(!fresh&&!(found->node==n)){rows->removeWidget(found->shell);delete found->shell;rowEntries.erase(found);fresh=true;}
@@ -1584,7 +1595,8 @@ class Dock : public QWidget {
    r->setNativeList(nativeList);
    r->setDisclosure(n.scene||n.group||n.folder,isOpen);
    r->thumb->setFixedSize(thumbnailSize(density(n),n.scene));
-   r->setSelected(n.program||n.preview||expanded);
+   r->setSelected(n.program||n.preview||selected==n.key);
+   r->setCardHeader(hasSources);
    r->setSourceVisible(n.visible);
    r->setStatus(!n.program&&n.preview?(favorites.contains(n.uid)&&n.scene?"★ PREVIEW":"PREVIEW"):n.scene&&favorites.contains(n.uid)?"★":"");
    r->thumb->setPixmap(sourceArtwork(n,r));
@@ -1596,7 +1608,7 @@ class Dock : public QWidget {
    if(!art.isNull()){artworkOverrides.insert(n.uid);r->thumb->setPixmap(art);}
    r->setAccent(appearance.color);
    if(n.scene||n.folder)sceneColor=appearance.color;
-   else r->setBranchColor(sceneColor,nodeIndex==0||nodes[nodeIndex-1].scene||nodes[nodeIndex-1].folder,nodeIndex+1==nodes.size()||nodes[nodeIndex+1].scene||nodes[nodeIndex+1].folder);
+   else r->setBranchColor(sceneColor,false,nodeIndex+1==nodes.size()||nodes[nodeIndex+1].scene||nodes[nodeIndex+1].folder);
    if(n.scene||n.folder)sourceParity=0;
    const bool stripe=n.scene?stripeEnabled(true):!n.folder&&stripeEnabled(false);
    const bool odd=n.scene?(sceneParity++%2)!=0:!n.folder&&(sourceParity++%2)!=0;
@@ -1610,7 +1622,7 @@ class Dock : public QWidget {
    if(fresh){
    r->onAppearance=[this,n]{if(n.folder){auto pos=QCursor::pos();QTimer::singleShot(0,this,[this,n,pos]{folderMenu(n,pos);});}else queueNativeContext(n);};
    r->onBody=[this,n]{toggle(n);};
-   if(n.scene)r->onDisclosure=[this,n]{if(searching())return;animateStructure=true;if(opened.contains(n.key))opened.remove(n.key);else opened.insert(n.key);saveOpened();dirty=true;request();};
+   if(n.scene)r->onDisclosure=[this,n]{toggle(n);};
    if(!n.locked){
     r->onDragMove=[this,n](QPoint pos){return dragMove(n,pos);};
     r->onDrop=[this,n](QPoint pos){finishDrag(n,pos);};
