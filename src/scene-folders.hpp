@@ -34,6 +34,26 @@ public:
  QString parentOfFolder(const QString&id)const{int i=index(id);return i<0?QString():entries[i].parent;}
  QString parentOfScene(const QString&id)const{return membership.value(id);}
  bool contains(const QString&id)const{return index(id)>=0;}
+ bool validTab(const QString&id)const{return id.isEmpty()||(contains(id)&&parentOfFolder(id).isEmpty());}
+ QString rootForFolder(const QString&id)const{
+  auto current=id;
+  while(!current.isEmpty()&&!parentOfFolder(current).isEmpty())current=parentOfFolder(current);
+  return current;
+ }
+ QString rootForScene(const QString&id)const{return rootForFolder(parentOfScene(id));}
+ QString duplicateStructure(const QString&id,const QString&name){
+  if(id.isEmpty()||!validTab(id))return {};
+  const auto original=entries;SceneFolders next=*this;
+  auto root=next.add(name,{});if(root.isEmpty())return {};
+  QMap<QString,QString> mapping{{id,root}};
+  for(int level=0;level<8;++level){
+   for(const auto&f:original)if(!mapping.contains(f.id)&&mapping.contains(f.parent)){
+    auto child=next.add(f.name,mapping.value(f.parent));if(child.isEmpty())return {};
+    mapping.insert(f.id,child);
+   }
+  }
+  *this=next;return root;
+ }
  QString path(const QString&id)const{
   QStringList parts;auto current=id;
   for(int i=0;i<8&&!current.isEmpty();++i){int at=index(current);if(at<0)break;parts.prepend(entries[at].name);current=entries[at].parent;}
@@ -91,6 +111,11 @@ class SceneFolderStore {
  static QString key(const QString&collection){return "collections/"+QString::fromLatin1(collection.toUtf8().toHex())+"/folders";}
 public:
  explicit SceneFolderStore(const QString&file):settings(file,QSettings::IniFormat){}
+ QString tab(const QString&collection)const{return settings.value(key(collection)+"-active-tab").toString();}
+ bool saveTab(const QString&collection,const QString&id){
+  if(collection.isEmpty())return false;
+  settings.setValue(key(collection)+"-active-tab",id);settings.sync();return settings.status()==QSettings::NoError;
+ }
  SceneFolders load(const QString&collection)const{return SceneFolders::decode(settings.value(key(collection)).toByteArray());}
  bool save(const QString&collection,const SceneFolders&folders){
   if(collection.isEmpty())return false;

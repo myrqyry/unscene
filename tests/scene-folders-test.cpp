@@ -10,6 +10,9 @@ int main(int argc,char**argv){
  CHECK(f.moveScene("scene-1",b));CHECK(f.parentOfScene("scene-1")==b);
  CHECK(!f.moveFolder(a,b));CHECK(!f.moveFolder(a,a));
  CHECK(!f.moveScene("scene-2","missing"));
+ CHECK(f.rootForScene("scene-1")==a);
+ CHECK(f.rootForScene("unfiled").isEmpty());
+ CHECK(f.validTab(a)&&f.validTab({})&&!f.validTab(b));
  CHECK(f.rename(b,"Gameplay"));CHECK(f.path(b)=="Streaming / Gameplay");
  auto decoded=SceneFolders::decode(f.encode());CHECK(decoded.encode()==f.encode());
  CHECK(decoded.remove(a));CHECK(decoded.parentOfFolder(b).isEmpty());
@@ -18,7 +21,14 @@ int main(int argc,char**argv){
  QTemporaryDir tmp;CHECK(tmp.isValid());
  {SceneFolderStore store(tmp.filePath("folders.ini"));CHECK(store.save("A",f));}
  SceneFolderStore store(tmp.filePath("folders.ini"));CHECK(store.load("A").encode()==f.encode());
- CHECK(store.load("B").folders().isEmpty());CHECK(!store.save("",f));
+ CHECK(store.load("B").folders().isEmpty());
+ CHECK(store.saveTab("A",a));CHECK(store.tab("A")==a);CHECK(store.tab("B").isEmpty());
+ CHECK(store.saveTab("A",{}));CHECK(store.tab("A").isEmpty());
+ auto duplicate=f.duplicateStructure(a,"Recording");
+ CHECK(!duplicate.isEmpty()&&f.validTab(duplicate));
+ CHECK(f.rootForScene("scene-1")==a);
+ CHECK(f.folders().size()==4);
+ CHECK(f.remove(duplicate));CHECK(!store.save("",f));
  CHECK(SceneFolders::decode(R"({"folders":[{"id":"folder:a","name":"a","parent":"folder:b"},{"id":"folder:b","name":"b","parent":"folder:a"}],"scenes":{"s":"folder:a"}})").folders().isEmpty());
  return 0;
 }

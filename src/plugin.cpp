@@ -15,6 +15,7 @@
 #include "row.hpp"
 #include "snapshot.hpp"
 #include <QToolBar>
+#include <QTabBar>
 #include "appearance-dialog.hpp"
 #include "navigation.hpp"
 #include "scene-folders.hpp"
@@ -526,6 +527,9 @@ class Dock : public QWidget {
  NavigationStore navigation{configPath("navigation.ini")};
  SceneFolderStore folderStore{configPath("scene-folders.ini")};
  SceneFolders folders;
+ QTabBar*sceneTabs=nullptr;
+ QString activeTab,programTab,previewTab;
+ bool tabsDirty=true;
  Density sceneDensity=navigation.sceneDensity(),sourceDensity=navigation.sourceDensity();
  QLineEdit*search;
  GlyphButton *collapse,*expand;
@@ -661,22 +665,56 @@ class Dock : public QWidget {
   if(!navigation.saveDensity(sceneDensity,sourceDensity))blog(LOG_WARNING,"[Unscene] Could not save density settings");
   dirty=true;request();
  }
+ void selectTab(const QString&id){
+  if(!sameCollection(collection)||!folders.validTab(id)||id==activeTab)return;
+  activeTab=id;folderStore.saveTab(collection,id);tabsDirty=true;dirty=true;animateStructure=false;
+  clearDrag();selected.clear();request();
+ }
+ void refreshTabs(){
+  if(!folders.validTab(activeTab)){activeTab.clear();folderStore.saveTab(collection,activeTab);}
+  QVector<QPair<QString,QString>> wanted{{{},QStringLiteral("Unfiled")}};
+  for(const auto&f:folders.folders())if(f.parent.isEmpty())wanted.append({f.id,f.name});
+  QSignalBlocker block(sceneTabs);
+  bool rebuild=sceneTabs->count()!=wanted.size();
+  for(int i=0;!rebuild&&i<wanted.size();++i)rebuild=sceneTabs->tabData(i).toString()!=wanted[i].first||sceneTabs->tabText(i)!=QString(wanted[i].second).replace("&","&&");
+  if(rebuild){while(sceneTabs->count())sceneTabs->removeTab(0);
+   for(const auto&t:wanted){int i=sceneTabs->addTab(QString(t.second).replace("&","&&"));sceneTabs->setTabData(i,t.first);}
+  }
+  for(int i=0;i<wanted.size();++i){
+   auto id=wanted[i].first;auto title=wanted[i].second;bool live=id==programTab,preview=id==previewTab;
+   QString tip=title;if(live)tip+=" — contains live scene";if(preview)tip+=" — contains preview scene";
+   sceneTabs->setTabToolTip(i,tip);
+   QIcon icon;
+   if(live)icon=QIcon(glyphPixmap("live",sceneTabs->palette().color(QPalette::Text),16,sceneTabs->devicePixelRatioF()));
+   else if(!id.isEmpty()){auto appearance=appearances.load(id);auto art=appearancePixmap(appearance,sceneTabs->palette(),QSize(16,16));if(!art.isNull())icon=QIcon(art);}
+   sceneTabs->setTabIcon(i,icon);
+   if(id==activeTab)sceneTabs->setCurrentIndex(i);
+  }
+  tabsDirty=false;
+ }
+ void tabOverflow(QWidget*anchor){
+  QMenu menu(this);for(int i=0;i<sceneTabs->count();++i){
+   auto id=sceneTabs->tabData(i).toString();auto*a=menu.addAction(sceneTabs->tabIcon(i),sceneTabs->tabText(i));
+   a->setCheckable(true);a->setChecked(id==activeTab);connect(a,&QAction::triggered,this,[this,id]{selectTab(id);});
+  }menu.exec(anchor->mapToGlobal(QPoint(0,anchor->height())));
+ }
+ void saveTabSelection(const QString&id){activeTab=id;folderStore.saveTab(collection,id);tabsDirty=true;dirty=true;request();}
  bool saveFolders(const SceneFolders&next,const QString&expected){
   if(!sameCollection(expected))return false;
   if(!folderStore.save(expected,next)){QMessageBox::warning(this,"Unscene","Could not save scene folders.");return false;}
-  folders=next;animateStructure=true;dirty=true;request();return true;
+  folders=next;tabsDirty=true;animateStructure=true;dirty=true;request();return true;
  }
  void newFolder(const QString&parent,const QString&expected){
   if(!sameCollection(expected))return;
   QScopedValueRollback<bool> guard(editingAppearance,true);
-  bool ok=false;auto name=QInputDialog::getText(this,"New scene folder","Folder name",QLineEdit::Normal,"New folder",&ok).trimmed();
+  bool ok=false;auto name=QInputDialog::getText(this,parent.isEmpty()?"New scene tab":"New scene folder",parent.isEmpty()?"Tab name":"Folder name",QLineEdit::Normal,parent.isEmpty()?"New tab":"New folder",&ok).trimmed();
   if(!ok||name.isEmpty()||!sameCollection(expected))return;
   auto next=folders;auto id=next.add(name,parent);
   if(id.isEmpty()){QMessageBox::information(this,"Unscene","Folder limit reached or parent unavailable.");return;}
-  if(saveFolders(next,expected)){opened.insert(id);if(!parent.isEmpty())opened.insert(parent);saveOpened();}
+  if(saveFolders(next,expected)){opened.insert(id);if(!parent.isEmpty())opened.insert(parent);else saveTabSelection(id);saveOpened();}
  }
  void moveFolderMenu(QMenu&menu,const Node&n,const QString&expected){
-  auto*sub=menu.addMenu("Move to folder");
+  auto*sub=menu.addMenu("Move to tab / folder");
   auto parent=n.folder?folders.parentOfFolder(n.key):folders.parentOfScene(n.uid);
   auto add=[&](const QString&id,const QString&title){
    auto candidate=folders;bool valid=n.folder?candidate.moveFolder(n.key,id):candidate.moveScene(n.uid,id);
@@ -688,7 +726,7 @@ class Dock : public QWidget {
     if(saveFolders(next,expected)&&!id.isEmpty()){for(auto current=id;!current.isEmpty();current=folders.parentOfFolder(current))opened.insert(current);saveOpened();}
    });
   };
-  add({},"Top level");for(const auto&f:folders.folders())add(f.id,folders.path(f.id));
+  add({},"Unfiled");for(const auto&f:folders.folders())add(f.id,folders.path(f.id));
  }
  void folderMenu(const Node&n,const QPoint&pos){
   auto expected=collection;if(!sameCollection(expected)||!folders.contains(n.key))return;
@@ -696,14 +734,25 @@ class Dock : public QWidget {
   auto*create=menu.addAction("New subfolder…");
   connect(create,&QAction::triggered,this,[this,n,expected]{QTimer::singleShot(0,this,[this,n,expected]{newFolder(n.key,expected);});});
   moveFolderMenu(menu,n,expected);
-  auto*rename=menu.addAction("Rename folder…");
+  const bool isTab=folders.validTab(n.key);
+  if(isTab){
+   auto*duplicate=menu.addAction("Duplicate folder structure…");
+   connect(duplicate,&QAction::triggered,this,[this,n,expected]{QTimer::singleShot(0,this,[this,n,expected]{
+    if(!sameCollection(expected))return;QScopedValueRollback<bool> guard(editingAppearance,true);
+    bool ok=false;auto name=QInputDialog::getText(this,"Duplicate tab structure","New tab name (no scenes copied)",QLineEdit::Normal,n.title+" copy",&ok).trimmed();
+    if(!ok||!sameCollection(expected))return;auto next=folders;auto id=next.duplicateStructure(n.key,name);
+    if(id.isEmpty()){QMessageBox::information(this,"Unscene","Could not duplicate folder structure.");return;}
+    if(saveFolders(next,expected))saveTabSelection(id);
+   });});
+  }
+  auto*rename=menu.addAction(isTab?"Rename tab…":"Rename folder…");
   connect(rename,&QAction::triggered,this,[this,n,expected]{QTimer::singleShot(0,this,[this,n,expected]{
    if(!sameCollection(expected))return;QScopedValueRollback<bool> guard(editingAppearance,true);
    bool ok=false;auto name=QInputDialog::getText(this,"Rename folder","Name",QLineEdit::Normal,n.title,&ok).trimmed();
    if(ok&&sameCollection(expected)){auto next=folders;if(next.rename(n.key,name))saveFolders(next,expected);}
   });});
   auto*appearance=menu.addAction("Appearance…");connect(appearance,&QAction::triggered,this,[this,n]{queueAppearance(n);});
-  auto*remove=menu.addAction("Remove folder (keep contents)");
+  auto*remove=menu.addAction(isTab?"Remove tab (keep contents)":"Remove folder (keep contents)");
   connect(remove,&QAction::triggered,this,[this,n,expected]{
    if(!sameCollection(expected))return;auto next=folders;
    if(next.remove(n.key)&&saveFolders(next,expected)){opened.remove(n.key);saveOpened();}
@@ -712,7 +761,7 @@ class Dock : public QWidget {
  }
  void densityMenu(QWidget*anchor){
   QMenu menu(this);
-  auto*folder=menu.addAction("New scene folder…");auto expected=collection;connect(folder,&QAction::triggered,this,[this,expected]{QTimer::singleShot(0,this,[this,expected]{newFolder({},expected);});});
+  auto*folder=menu.addAction("New scene tab…");auto expected=collection;connect(folder,&QAction::triggered,this,[this,expected]{QTimer::singleShot(0,this,[this,expected]{newFolder({},expected);});});
   menu.addSeparator();
   for(bool scenes:{true,false}){
    auto*sub=menu.addMenu(scenes?"Scene thumbnails":"Source thumbnails");
@@ -1083,7 +1132,7 @@ class Dock : public QWidget {
   AppearanceDialog dialog(n.title,appearances.load(n.uid),this);
   if(dialog.exec()==QDialog::Accepted){
    if(!appearances.save(n.uid,dialog.value()))QMessageBox::warning(this,"Unscene","Could not save appearance settings.");
-   dirty=true;
+   dirty=true;tabsDirty=true;
   }
   editingAppearance=false;request();
  }
@@ -1247,7 +1296,7 @@ class Dock : public QWidget {
   }
   rowOrder=nextOrder;
   if(nodes.isEmpty()){
-   auto*empty=new QLabel(searching()?"No matching scenes or sources":"No scenes",body);empty->setProperty("unsceneEmpty",true);empty->setAlignment(Qt::AlignCenter);empty->setContentsMargins(4,12,4,12);rows->addWidget(empty);
+   auto*empty=new QLabel(searching()?"No matches in this tab":"No scenes in this tab",body);empty->setProperty("unsceneEmpty",true);empty->setAlignment(Qt::AlignCenter);empty->setContentsMargins(4,12,4,12);rows->addWidget(empty);
   }
   rows->addStretch(); scroll->verticalScrollBar()->setValue(pos);
   if(reorder){
@@ -1266,12 +1315,25 @@ public:
   auto*refreshButton=new GlyphButton("refresh",bar);refreshButton->setToolTip("Refresh snapshots (when idle capture is enabled and outputs are idle)");
   connect(refreshButton,&QToolButton::clicked,this,[this,refreshButton]{refreshButton->spin();if(!captureAllowed())return;thumbnails.clear();attempted.clear();dirty=true;request();});
   auto*settingsButton=new GlyphButton("properties",bar);settingsButton->setToolTip("Dock settings");settingsButton->setAccessibleName("Dock settings");
-  auto*newFolderButton=new GlyphButton("folder",bar);newFolderButton->setToolTip("New scene folder");newFolderButton->setAccessibleName("New scene folder");
+  auto*tabStrip=new QWidget(this);auto*tabLayout=new QHBoxLayout(tabStrip);tabLayout->setContentsMargins(0,0,0,0);tabLayout->setSpacing(2);
+  sceneTabs=new QTabBar(tabStrip);sceneTabs->setObjectName("UnsceneSceneTabs");sceneTabs->setAccessibleName("Scene organization tabs");
+  sceneTabs->setExpanding(false);sceneTabs->setUsesScrollButtons(true);sceneTabs->setElideMode(Qt::ElideRight);sceneTabs->setDrawBase(true);
+  sceneTabs->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);sceneTabs->setMinimumWidth(0);
+  sceneTabs->setContextMenuPolicy(Qt::CustomContextMenu);
+  connect(sceneTabs,&QTabBar::currentChanged,this,[this](int i){if(i>=0)selectTab(sceneTabs->tabData(i).toString());});
+  connect(sceneTabs,&QWidget::customContextMenuRequested,this,[this](const QPoint&p){
+   int i=sceneTabs->tabAt(p);if(i<0)return;auto id=sceneTabs->tabData(i).toString();
+   if(id.isEmpty())return;Node n;n.folder=true;n.key=n.uid=id;n.title=folders.path(id);folderMenu(n,sceneTabs->mapToGlobal(p));
+  });
+  auto*newFolderButton=new GlyphButton("plus",tabStrip);newFolderButton->setToolTip("New scene tab");newFolderButton->setAccessibleName("New scene tab");
+  auto*overflowButton=new GlyphButton("down",tabStrip);overflowButton->setToolTip("All scene tabs");overflowButton->setAccessibleName("All scene tabs");
   connect(newFolderButton,&QToolButton::clicked,this,[this]{newFolder({},collection);});
-  toolbar={refreshButton,collapse,expand,newFolderButton,settingsButton};for(auto*b:toolbar)b->setMotionDuration(motionDuration);
+  connect(overflowButton,&QToolButton::clicked,this,[this,overflowButton]{tabOverflow(overflowButton);});
+  tabLayout->addWidget(sceneTabs,1);tabLayout->addWidget(newFolderButton);tabLayout->addWidget(overflowButton);l->addWidget(tabStrip);
+  toolbar={refreshButton,collapse,expand,newFolderButton,overflowButton,settingsButton};for(auto*b:toolbar)b->setMotionDuration(motionDuration);
   connect(settingsButton,&QToolButton::clicked,this,[this,settingsButton]{densityMenu(settingsButton);});
-  search=new QLineEdit(bar);search->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);search->setPlaceholderText("Find scenes or sources…");search->setClearButtonEnabled(true);search->setAccessibleName("Find scenes or sources");search->setMinimumWidth(50);
-  bar->addWidget(search);bar->addWidget(refreshButton);bar->addWidget(collapse);bar->addWidget(expand);bar->addWidget(newFolderButton);bar->addWidget(settingsButton);l->addWidget(bar);
+  search=new QLineEdit(bar);search->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);search->setPlaceholderText("Find in tab…");search->setClearButtonEnabled(true);search->setAccessibleName("Find scenes or sources in tab");search->setMinimumWidth(50);
+  bar->addWidget(search);bar->addWidget(refreshButton);bar->addWidget(collapse);bar->addWidget(expand);bar->addWidget(settingsButton);l->addWidget(bar);
   connect(search,&QLineEdit::textChanged,this,[this](const QString&t){query=t;animateStructure=true;collapse->setEnabled(!searching());expand->setEnabled(!searching());dirty=true;request();});
   scroll=new QScrollArea(this);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);body=new QWidget;rows=new ReorderLayout(body);rows->setContentsMargins(0,0,0,0);rows->setSpacing(1);scroll->setWidget(body);
   splitter=new QSplitter(Qt::Vertical,this);splitter->setChildrenCollapsible(false);splitter->addWidget(scroll);
@@ -1284,7 +1346,9 @@ public:
   inspector->onProperties=[this]{if(inspected&&sameCollection(inspectorCollection)){auto s=source(inspected->uid);if(s)obs_frontend_open_source_properties(s.get());}};
   inspector->onFilters=[this]{if(inspected&&sameCollection(inspectorCollection)){auto s=source(inspected->uid);if(s)obs_frontend_open_source_filters(s.get());}};
   themeGeometry();
-  connect(collapse,&QToolButton::clicked,this,[this]{animateStructure=true;opened.clear();selected.clear();saveOpened();dirty=true;request();});
+  connect(collapse,&QToolButton::clicked,this,[this]{animateStructure=true;
+   for(auto it=opened.begin();it!=opened.end();){if(sceneKeys.contains(it->section('/',0,0)))it=opened.erase(it);else ++it;}
+   selected.clear();saveOpened();dirty=true;request();});
   connect(expand,&QToolButton::clicked,this,[this]{animateStructure=true;opened.unite(sceneKeys);saveOpened();dirty=true;request();});
   dragScrollTimer.setInterval(25);connect(&dragScrollTimer,&QTimer::timeout,this,[this]{scrollDraggedRow();});
   connect(&timer,&QTimer::timeout,this,[this]{refresh();});clock.start();timer.start(400); // Bounded polling and at most one idle capture per tick.
@@ -1293,25 +1357,30 @@ public:
   int h=themeSpacing(this,Qt::Horizontal),v=themeSpacing(this,Qt::Vertical);
   dockLayout->setContentsMargins(qMax(1,h/2),qMax(1,v/2),qMax(1,h/2),qMax(1,v/2));dockLayout->setSpacing(qMax(1,v/2));
   rows->setSpacing(0);search->setMinimumWidth(search->fontMetrics().horizontalAdvance("MMMM"));
+  sceneTabs->setFont(rowTypography(font(),TypographyRole::Tab));sceneTabs->updateGeometry();
   bar->updateGeometry();
  }
- void themeChanged(){if(drawer->moving())drawer->finish();inspector->finishMotion();themeGeometry();resetRows=true;dirty=true;request();}
+ void themeChanged(){tabsDirty=true;if(drawer->moving())drawer->finish();inspector->finishMotion();themeGeometry();resetRows=true;dirty=true;request();}
  void hideEvent(QHideEvent*e)override{clearDrag();rows->finish();if(drawer->moving())drawer->finish();inspector->finishMotion();QWidget::hideEvent(e);}
  void stop(){stopping=true;clearDrag();rows->finish();if(drawer->moving())drawer->finish();inspector->finishMotion();timer.stop();}
  void refresh(){
   if(stopping||editingAppearance||!isVisible())return;
   char *raw=obs_frontend_get_current_scene_collection();QString now=QString::fromUtf8(raw?raw:"");bfree(raw);
-  if(collection!=now){closeInspector();resetRows=true;collection=now;folders=folderStore.load(now);copied.reset();thumbnails.clear();attempted.clear();opened.clear();selected.clear();initialized=false;dirty=true;}
+  if(collection!=now){closeInspector();resetRows=true;collection=now;folders=folderStore.load(now);activeTab=folderStore.tab(now);tabsDirty=true;copied.reset();thumbnails.clear();attempted.clear();opened.clear();selected.clear();initialized=false;dirty=true;}
   Source live(obs_frontend_get_current_scene(),obs_source_release);
   Source preview(obs_frontend_preview_program_mode_active()?obs_frontend_get_current_preview_scene():nullptr,obs_source_release);
   if(!initialized&&!now.isEmpty()){auto saved=navigation.opened(now);if(saved)opened=*saved;else if(live)opened.insert(uuid(live.get()));initialized=true;}
   obs_frontend_source_list list={};obs_frontend_get_scenes(&list);
   QVector<Node> nodes;sceneKeys.clear();
-  for(const auto&f:folders.folders())sceneKeys.insert(f.id);
-  for(size_t i=0;i<list.sources.num;i++)sceneKeys.insert(uuid(list.sources.array[i]));
+  auto nextProgram=live?folders.rootForScene(uuid(live.get())):QStringLiteral("no-program");
+  auto nextPreview=preview?folders.rootForScene(uuid(preview.get())):QStringLiteral("no-preview");
+  if(programTab!=nextProgram||previewTab!=nextPreview){programTab=nextProgram;previewTab=nextPreview;tabsDirty=true;}
+  if(tabsDirty)refreshTabs();
+  for(const auto&f:folders.folders())if(f.id!=activeTab&&folders.rootForFolder(f.id)==activeTab)sceneKeys.insert(f.id);
+  for(size_t i=0;i<list.sources.num;i++){auto id=uuid(list.sources.array[i]);if(folders.rootForScene(id)==activeTab)sceneKeys.insert(id);}
   // The folder model is presentation-only; OBS retains the native scene list and source identity.
   std::function<void(const QString&,int)> append=[&](const QString&parent,int depth){
-   for(const auto&f:folders.folders())if(f.parent==parent){
+   for(const auto&f:folders.folders())if(!parent.isEmpty()&&f.parent==parent){
     Node n;n.folder=true;n.key=n.uid=f.id;n.title=f.name;n.depth=depth;nodes.append(n);
     if(searching()||opened.contains(n.key))append(n.key,depth+1);
    }
@@ -1322,7 +1391,7 @@ public:
     if(searching()||opened.contains(n.key))collect(obs_scene_from_source(s),n.key,depth+1,nodes);
    }
   };
-  append({},0);
+  append(activeTab,0);
   obs_frontend_source_list_free(&list);
   if(searching())nodes=filterHierarchy(nodes,query);
   if(dirty||nodes!=previous){previous=nodes;dirty=false;render(nodes);}

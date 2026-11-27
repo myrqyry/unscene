@@ -62,5 +62,13 @@ int main(int argc,char**argv) {
  hidden.setSelected(true);if(surfaceContrast(hidden.inkColor(),pal.color(QPalette::Highlight))<4.5)return 16;
  hidden.setSelected(false);hidden.setSourceVisible(true);app.processEvents();
  if(hidden.inkColor()!=full||hidden.thumb->grab().toImage().pixelColor(hidden.thumb->width()/2,hidden.thumb->height()/2)!=visibleArt)return 17;
+ QFont base=app.font();base.setPointSizeF(12);
+ auto sceneFont=rowTypography(base,TypographyRole::Scene);
+ auto sourceFont=rowTypography(base,TypographyRole::Source);
+ auto metaFont=rowTypography(base,TypographyRole::Status);
+ auto tabFont=rowTypography(base,TypographyRole::Tab);
+ if(sceneFont.weight()<=sourceFont.weight()||sceneFont.pointSizeF()<sourceFont.pointSizeF()||metaFont.pointSizeF()<10||tabFont.weight()<=sourceFont.weight())return 18;
+ base.setPixelSize(16);
+ if(rowTypography(base,TypographyRole::Status).pixelSize()<13)return 19;
  return 0;
 }

@@ -19,6 +19,14 @@
 #include "scene-palette.hpp"
 #include "motion.hpp"
 
+enum class TypographyRole {Scene,Source,Status,Tab};
+inline QFont rowTypography(QFont font,TypographyRole role){
+ font.setWeight(role==TypographyRole::Scene?QFont::DemiBold:role==TypographyRole::Tab?QFont::Medium:QFont::Normal);
+ const qreal scale=role==TypographyRole::Status?.90:1.;
+ if(font.pointSizeF()>0)font.setPointSizeF(font.pointSizeF()*scale);
+ else if(font.pixelSize()>0)font.setPixelSize(qMax(1,qRound(font.pixelSize()*scale)));
+ return font;
+}
 class ElidedLabel:public QLabel{
  QString full; QColor ink;
 public:
@@ -78,7 +86,7 @@ public:
   disclosure=new GlyphButton("right",top);disclosure->setFocusPolicy(Qt::NoFocus);disclosure->setCircular(true);
   connect(disclosure,&QToolButton::clicked,this,[this]{if(onBody)onBody();});first->addWidget(disclosure);disclosure->hide();
   thumb=new SourceArtworkLabel(top);thumb->setFixedSize(scene?48:36,scene?27:22);thumb->setAlignment(Qt::AlignCenter);first->addWidget(thumb);
-  name=new ElidedLabel(title,top);if(scene){auto f=name->font();f.setWeight(QFont::DemiBold);name->setFont(f);}first->addWidget(name,1);
+  name=new ElidedLabel(title,top);first->addWidget(name,1);
   name->installEventFilter(this);thumb->installEventFilter(this);top->installEventFilter(this);
   status=new ElidedLabel("",top);status->hide();first->addWidget(status);status->setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Preferred);
   secondary=new QWidget(this);extra=new QHBoxLayout(secondary);extra->setContentsMargins(0,0,0,0);extra->addStretch();secondaryReveal=new Reveal(secondary,this);outer->addWidget(secondaryReveal);
@@ -92,7 +100,7 @@ public:
   sourceDimmed=dim;thumb->setDimmed(dim);applyInk();update();
  }
  void setNativeList(QListView *v){if(nativeList!=v){nativeList=v;applyGeometry();refreshRoles();applyInk();update();}}
- void setStatus(const QString&s){status->setFullText(s);auto f=name->font();f.setWeight(QFont::Normal);if(f.pointSizeF()>2)f.setPointSizeF(f.pointSizeF()*.82);status->setFont(f);status->setFixedWidth(status->fontMetrics().horizontalAdvance(s)+2*themeSpacing(this,Qt::Horizontal));status->setVisible(!s.isEmpty());status->setToolTip(s);}
+ void setStatus(const QString&s){status->setFullText(s);status->setFont(rowTypography(font(),TypographyRole::Status));status->setFixedWidth(status->fontMetrics().horizontalAdvance(s)+2*themeSpacing(this,Qt::Horizontal));status->setVisible(!s.isEmpty());status->setToolTip(s);}
  QColor inkColor()const{
   const auto fg=selected?palette().color(QPalette::HighlightedText):isScene?roles.onHeader:branchEnabled?roles.onContainer:palette().color(QPalette::WindowText);
   if(!sourceDimmed)return fg;
@@ -207,16 +215,18 @@ private:
  QHBoxLayout *first,*extra;GlyphButton*disclosure;ElidedLabel*status;QPointer<QListView>nativeList;
  int outerLeft()const{return layout()->contentsMargins().left();}
  void applyGeometry(){
+  name->setFont(rowTypography(font(),isScene?TypographyRole::Scene:TypographyRole::Source));
+  status->setFont(rowTypography(font(),TypographyRole::Status));
   const auto h=themeSpacing(this,Qt::Horizontal),v=themeSpacing(this,Qt::Vertical);
   auto*view=nativeList?static_cast<QWidget*>(nativeList.data()):this;
-  const QSize content(fontMetrics().horizontalAdvance("M"),fontMetrics().height());
+  const QSize content(name->fontMetrics().horizontalAdvance("M"),name->fontMetrics().height());
   const auto native=nativeItemSize(view,content);
   const auto insetX=qBound(2,(native.width()-content.width())/2,16);
   const auto insetY=qBound(1,(native.height()-content.height())/2,12);
   const int indent=disclosure->sizeHint().width()+h;
   layout()->setContentsMargins(insetX+nestDepth*indent,insetY,insetX,insetY);
   layout()->setSpacing(qMax(1,v/2));first->setSpacing(h);extra->setSpacing(h);
-  top->setMinimumHeight(qMax(fontMetrics().height(),native.height()-2*insetY));
+  top->setMinimumHeight(qMax(name->fontMetrics().height(),native.height()-2*insetY));
   ready=true;updateGeometry();
  }
  void styleControl(GlyphButton*b){
